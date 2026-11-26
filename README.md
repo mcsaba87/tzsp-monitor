@@ -2,7 +2,7 @@
 
 TZSP Monitor is a comprehensive network monitoring and security solution designed to capture, analyze, and respond to network traffic. By leveraging the TZSP (Traffic Zone Security Protocol) and integrating with a suite of monitoring tools, it provides deep visibility into network activities and allows for automated responses to potential security threats.
 
-![](/home/csabi/devel/tzsp-monitor/resources/screenshots/overview1.png)
+<img src="resources/screenshots/overview1.png"/>
 #### Key Features
 - **Real-time Flow Capture**: Efficiently capture and process network flows using high-performance tools.
 - **Detailed Flow Analysis**: Enrich network flows with GeoIP data, application categories, and service mappings.
@@ -66,10 +66,10 @@ Configure the following environment variables to set up the core components:
 - **Alerter**: Run via `python3 alerter/alerter.py`.
 - **DNS Monitor**: Run via `python3 dns-monitor/monitor.py`.
 
-![](/home/csabi/devel/tzsp-monitor/resources/screenshots/zone_matrix.png)
-![](/home/csabi/devel/tzsp-monitor/resources/screenshots/port_scanners.png)
-![](/home/csabi/devel/tzsp-monitor/resources/screenshots/suricata_alerts.png)
-![](/home/csabi/devel/tzsp-monitor/resources/screenshots/dns_lookups.png)
-![](/home/csabi/devel/tzsp-monitor/resources/screenshots/subnet_hosts.png)
-![](/home/csabi/devel/tzsp-monitor/resources/screenshots/packet_capture.png)
-![](/home/csabi/devel/tzsp-monitor/resources/screenshots/overview2.png)
+<img src="resources/screenshots/zone_matrix.png"/>
+<img src="resources/screenshots/port_scanners.png"/>
+<img src="resources/screenshots/suricata_alerts.png"/>
+<img src="resources/screenshots/dns_lookups.png"/>
+<img src="resources/screenshots/subnet_hosts.png"/>
+<img src="resources/screenshots/packet_capture.png"/>
+<img src="resources/screenshots/overview2.png"/>

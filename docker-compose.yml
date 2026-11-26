@@ -1,0 +1,598 @@
+version: '3.8'
+
+# Docker's own json-file logs are the third thing on this host with no upper
+# bound, and the largest of them is not the IDS: the collector prints one
+# [FLOW] line per completed flow, which on the production mirror (~200k
+# flows/hour) is on the order of a gigabyte of container log a day. Nothing
+# rotates that by default -- `docker logs` just grows until the disk is full.
+# 10 MB x 3 files per service is enough to debug a crash and cannot surprise
+# anyone. The disk-guard service below does not police these: they live in
+# Docker's data-root, not in a volume this stack can reach, so they are bounded
+# here at the source instead.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=my-user
+      - DOCKER_INFLUXDB_INIT_PASSWORD=my-super-secret-password
+      - DOCKER_INFLUXDB_INIT_ORG=my-org
+      - DOCKER_INFLUXDB_INIT_BUCKET=network_traffic
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-secret-token
+    # Deliberately NOT given the `logging: *logging` anchor the other services
+    # have, and deliberately given no retention environment either: its data
+    # sits in the *anonymous* volume the influxdb image declares, so any change
+    # to this service's config recreates the container, attaches a fresh empty
+    # volume, and the old one is left dangling -- 30 days of flows apparently
+    # gone, and still occupying the disk. Retention is therefore applied to the
+    # running instance over the API by disk-guard, which needs no recreate at
+    # all. Its container log is ~6k lines a fortnight, so the cap it is missing
+    # is the cheapest one here; `docker volume prune` is how the dangling copies
+    # go. Naming the volume is the right fix and needs a one-time data move --
+    # see "InfluxDB's data is in an anonymous volume" in CLAUDE.md.
+    restart: unless-stopped
+
+  dns-resolver:
+    build: ./dns-resolver
+    container_name: dns-resolver
+    # Reverse-DNS sidecar. Grafana (Infinity datasource) calls it at
+    # http://dns-resolver:8000/resolve to resolve only the top-10 / selected IPs.
+    # It also answers each IP's country from a LOCAL GeoIP database, which it
+    # keeps current itself: DB-IP's free country edition, fetched once a month
+    # into the `geoip` volume (the collector reads the same file). Lookups never
+    # leave this host. Set GEOIP_UPDATE=false for an offline host, and drop a
+    # GeoIP2-compatible country .mmdb in the volume as country.mmdb by hand.
+    # The same goes for MAC vendors: Wireshark's weekly `manuf` (the IEEE
+    # registry) in the `oui` volume, which arp-watch reads. OUI_UPDATE=false
+    # for an offline host; put a manuf or IEEE oui.csv there as `manuf`.
+    environment:
+      - GEOIP_DB=/geoip/country.mmdb
+      - GEOIP_UPDATE=${GEOIP_UPDATE:-true}
+      - OUI_DB=/oui/manuf
+      - OUI_UPDATE=${OUI_UPDATE:-true}
+    volumes:
+      - geoip:/geoip
+      - oui:/oui
+    logging: *logging
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: grafana
+    user: "0" # <--- ADD THIS to bypass host permission issues
+    ports:
+      - "3000:3000"
+    env_file:
+      # Local admin credentials (git-ignored). Overrides the default admin/admin.
+      - ./properties.yml
+    environment:
+      # Infinity datasource lets Grafana call the reverse-DNS sidecar over HTTP.
+      - GF_INSTALL_PLUGINS=yesoreyeram-infinity-datasource
+      # UI settings -- home page, Grafana's news/help/update clutter, feature
+      # toggles -- are in a small ini of our own; see the comment at its top.
+      - GF_PATHS_CONFIG=/opt/tzsp/grafana.ini
+    # Generates one datasource per REMOTE_SITE_* line in properties.yml (other
+    # tzsp-monitor instances, browsed from here through the dashboards' Site
+    # dropdown), then runs the image's own /run.sh.
+    entrypoint: ["/bin/sh", "/opt/tzsp/sites.sh"]
+    volumes:
+      # Map the entire provisioning directory in one go. The dashboards provider
+      # (dashboards.yml) loads the JSON files straight from here, so new/edited
+      # dashboards are picked up automatically -- no per-file mount needed, and
+      # no stale single-file bind-mount inodes.
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      # A directory, not the script alone, for the same inode reason.
+      - ./grafana/entrypoint:/opt/tzsp:ro
+    depends_on:
+      - influxdb
+      - dns-resolver
+      - dns-filter
+    logging: *logging
+    restart: unless-stopped
+
+  collector:
+    build: ./collector
+    container_name: tzsp-collector
+    network_mode: "host" # Crucial to sniff interface traffic & receive UDP 37008 TZSP streams
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - INFLUXDB_URL=http://localhost:8086
+      - INFLUXDB_TOKEN=my-super-secret-token
+      - INFLUXDB_ORG=my-org
+      - INFLUXDB_BUCKET=network_traffic
+      # The NIC the TZSP mirror arrives on. Set SNIFF_INTERFACE in the
+      # git-ignored .env (install.py does) rather than editing it here.
+      - SNIFF_INTERFACE=${SNIFF_INTERFACE:-wlp0s20f3}
+      - GEOIP_DB=/geoip/country.mmdb
+    volumes:
+      # src_country/dst_country tags. dns-resolver downloads and updates the
+      # file; this only reads it, and re-reads it when it changes.
+      - geoip:/geoip:ro
+    depends_on:
+      - influxdb
+    logging: *logging
+    restart: unless-stopped
+
+  # --- IDS path: TZSP -> tap -> Suricata -> responder ------------------------
+  #
+  # Suricata has no TZSP decoder, so the tunnel is stripped here first and the
+  # inner frames are injected into a tap that Suricata sniffs.
+  #
+  # These two containers share ONE network namespace, and it is deliberately
+  # *not* the host's: injected frames are handed to the local IP stack of
+  # whichever namespace the tap lives in, so on host networking every mirrored
+  # broadcast (ARP, DHCP, mDNS, SSDP) from the monitored network would be
+  # delivered to services listening on 0.0.0.0 on this machine. Keeping the tap
+  # in tzsp-decap's own namespace makes that impossible. The trade-off: if
+  # tzsp-decap is recreated, suricata must be restarted too, because its
+  # namespace went with it.
+  tzsp-decap:
+    build: ./tzsp-decap
+    container_name: tzsp-decap
+    ports:
+      # The mirror is aimed at this host, and the DNAT rule preserves the source
+      # address. The collector still sees the same packets: it sniffs the
+      # physical interface with AF_PACKET, which runs before NAT.
+      - "37008:37008/udp"
+    cap_add:
+      - NET_ADMIN # required to create the tap
+    devices:
+      - /dev/net/tun
+    environment:
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=my-super-secret-token
+      - INFLUXDB_ORG=my-org
+      - INFLUXDB_BUCKET=network_traffic
+      - TAP_INTERFACE=tzsp0
+      # 802.11 TZSP from a wireless sniffer also arrives on 37008 (RouterOS
+      # cannot be told another port) and is passed on to wids here, with the
+      # sensor's address in front. Empty drops it as bad-encap. Not a
+      # depends_on: decap re-resolves the name every stats tick.
+      - WIDS_FORWARD=wids:37009
+    depends_on:
+      - influxdb
+    logging: *logging
+    restart: unless-stopped
+
+  suricata:
+    image: jasonish/suricata:latest
+    container_name: suricata
+    # Joins tzsp-decap's namespace so tzsp0 is visible here. Nothing needs to
+    # reach Suricata over the network; eve.json is the only interface.
+    network_mode: "service:tzsp-decap"
+    cap_add:
+      - NET_ADMIN # promiscuous mode on the tap
+      - NET_RAW # AF_PACKET capture
+      - SYS_NICE # thread priorities
+    entrypoint: ["/bin/sh", "/etc/suricata/tzsp/entrypoint.sh"]
+    volumes:
+      # One directory mount rather than a file each for suricata.yaml, the
+      # entrypoint and the rules -- same reasoning as Grafana's provisioning dir.
+      - ./suricata:/etc/suricata/tzsp:ro
+      # Read only for suricata.home_net. Copy suricata.properties.example to
+      # suricata.properties first: if the file is missing, Docker creates a
+      # directory here instead and both readers fall back to their defaults.
+      - ./suricata.properties:/etc/tzsp-monitor/suricata.properties:ro
+      - suricata-logs:/var/log/suricata
+      - suricata-rules:/var/lib/suricata # keeps the downloaded ruleset across restarts
+      # threshold.config (rule suppressions written from the Grafana UI) and the
+      # unix command socket rule-control uses to apply them live.
+      - suricata-control:/var/lib/suricata-control
+      # The socket dns-monitor listens on. Nothing is written to this volume --
+      # the socket is a filesystem object, which is how two containers on
+      # different networks share a stream without exposing a port.
+      - suricata-dns:/var/lib/suricata-dns
+    depends_on:
+      - tzsp-decap
+    logging: *logging
+    restart: unless-stopped
+
+  rule-control:
+    build: ./rule-control
+    container_name: rule-control
+    # Deliberately NOT published on a host port. Grafana's Infinity datasource
+    # calls it server-side from inside this network, so nothing has to be exposed
+    # to a browser and the dashboard needs no environment-specific URL.
+    volumes:
+      # rw: it rewrites threshold.config and talks to the command socket.
+      - suricata-control:/var/lib/suricata-control
+      # ro, only to turn a sid into its msg text for the disabled-rules table.
+      - suricata-rules:/var/lib/suricata:ro
+      - ./suricata:/etc/suricata/tzsp:ro
+      - ./suricata.properties:/etc/tzsp-monitor/suricata.properties:ro
+    environment:
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=my-super-secret-token
+      - INFLUXDB_ORG=my-org
+      - INFLUXDB_BUCKET=network_traffic
+    depends_on:
+      - suricata
+    logging: *logging
+    restart: unless-stopped
+
+  # --- DNS web filtering: UT1 blacklists -> /ip/dns/adlist -------------------
+  #
+  # Two listeners on purpose, and the split is the security boundary:
+  #   8040  control API (/apply, /status, /categories, /catalog) -- NOT
+  #         published. Grafana's Infinity datasource calls it by name from
+  #         inside this network, exactly like rule-control.
+  #   8041  the rendered hosts files, published, because the ROUTER downloads
+  #         them itself and it is not on this network. Publishing the control
+  #         API here would let anyone who can reach this host switch the filter
+  #         off, which is why they are not the same server.
+  dns-filter:
+    build: ./dns-filter
+    container_name: dns-filter
+    ports:
+      - "8041:8041"
+    volumes:
+      # Mirrored UT1 `domains` files, the rendered lists, and the enabled-set
+      # state -- which is authoritative, so it must survive a recreate.
+      - dns-filter-state:/var/lib/dns-filter
+      # Router credentials (shared with the responder) + the dns_filter.* keys.
+      - ./suricata.properties:/etc/tzsp-monitor/suricata.properties:ro
+    environment:
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=my-super-secret-token
+      - INFLUXDB_ORG=my-org
+      - INFLUXDB_BUCKET=network_traffic
+    depends_on:
+      - influxdb
+    logging: *logging
+    restart: unless-stopped
+
+  # --- DNS visibility: who looked up what, and what the router refused ------
+  #
+  # Suricata connects *to* this service over a unix socket in the shared
+  # suricata-dns volume and streams DNS events at it; see the second eve-log
+  # output in suricata/suricata.yaml for why that is a socket and not a file.
+  #
+  # depends_on is influxdb only, NOT suricata -- same reasoning as disk-guard:
+  # depending on suricata would make `up -d --build dns-monitor` recreate
+  # tzsp-decap and suricata too, which is a ruleset re-fetch and a hole in the
+  # IDS. It does not need the ordering anyway: Suricata retries the socket
+  # until this service binds it, and reconnects by itself if it restarts.
+  #
+  # Publishes nothing and has no HTTP server at all: like disk-guard there is
+  # nothing here for a dashboard to click, only measurements to read.
+  dns-monitor:
+    build: ./dns-monitor
+    container_name: dns-monitor
+    volumes:
+      - suricata-dns:/var/lib/suricata-dns
+      # dns_monitor.* keys. No credentials in them -- this one never leaves
+      # the host.
+      - ./suricata.properties:/etc/tzsp-monitor/suricata.properties:ro
+    environment:
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=my-super-secret-token
+      - INFLUXDB_ORG=my-org
+      - INFLUXDB_BUCKET=network_traffic
+    depends_on:
+      - influxdb
+    logging: *logging
+    restart: unless-stopped
+
+  # --- IP reputation: public blocklists -> one RouterOS address list ---------
+  #
+  # Spamhaus DROP, abuse.ch Feodo and friends, switched on and off from the
+  # IP Reputation dashboard. On the default network (InfluxDB by name, the
+  # router by IP) and publishes nothing: Grafana calls its control API as
+  # http://ip-reputation:8070. Like the responder's list, this one blocks
+  # nothing until a firewall rule on the router references it -- and the
+  # dashboard says so when none does.
+  ip-reputation:
+    build: ./ip-reputation
+    container_name: ip-reputation
+    volumes:
+      # Enabled feeds (authoritative: the dashboard owns them) and the last
+      # good copy of each, so a feed host being down never empties the list.
+      - ip-reputation-state:/var/lib/ip-reputation
+      # mikrotik.* credentials, ip_reputation.*, and whitelist.*/suricata.home_net
+      # for the never-block filter.
+      - ./suricata.properties:/etc/tzsp-monitor/suricata.properties:ro
+    environment:
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=my-super-secret-token
+      - INFLUXDB_ORG=my-org
+      - INFLUXDB_BUCKET=network_traffic
+    depends_on:
+      - influxdb
+    logging: *logging
+    restart: unless-stopped
+
+  mikrotik-responder:
+    build: ./mikrotik-responder
+    container_name: mikrotik-responder
+    # On the default compose network on purpose: it needs InfluxDB by name and
+    # the router by IP, and it must NOT be in the capture namespace.
+    volumes:
+      - suricata-logs:/var/log/suricata # tails eve.json, prunes rotated copies
+      - responder-state:/var/lib/responder # read position, so a restart loses no alerts
+      - ./suricata.properties:/etc/tzsp-monitor/suricata.properties:ro
+    environment:
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=my-super-secret-token
+      - INFLUXDB_ORG=my-org
+      - INFLUXDB_BUCKET=network_traffic
+      # Where alert-named domains are blacklisted (domain_block.*). Its control
+      # port is unpublished, so this only works on the compose network -- and
+      # no depends_on: an absent dns-filter is a logged error, not a crash.
+      - DNS_FILTER_URL=http://dns-filter:8040
+    depends_on:
+      - influxdb
+      - suricata
+    logging: *logging
+    restart: unless-stopped
+
+  # --- Disk ceiling: Suricata's logs, and InfluxDB's retention --------------
+  #
+  # The only service here whose job is to delete things, and the only place the
+  # disk policy is written down. Two unbounded writers meet on this filesystem:
+  # Suricata appends to eve.json forever (suricata.yaml's `rotate-interval: day`
+  # is accepted by the config parser but measured on 8.0.6 it never rolls the
+  # file over -- one eve.json held 14 days and 105 MB here), and the InfluxDB
+  # bucket is created with *infinite* retention. A full disk stops the capture,
+  # the responder, the router writes and Grafana in the same minute.
+  #
+  # Every mount is something it has to reach as a filesystem object rather than
+  # over the network:
+  #   suricata-logs     rw  the files it rotates and prunes
+  #   suricata-control  rw  the command socket, to ask Suricata for
+  #                         `reopen-log-files` after a rename -- the only safe
+  #                         way to rotate a file another process holds open
+  #   disk-guard-state  rw  the effective retention, which has to survive a
+  #                         restart or a cut would be undone and redone forever
+  #
+  # depends_on is influxdb only, NOT suricata: depending on suricata would make
+  # `up -d --build disk-guard` recreate tzsp-decap and suricata too -- a ruleset
+  # re-fetch and a hole in the IDS. The guard starts fine without either; a
+  # missing command socket only means it cannot rotate yet, and it says so.
+  disk-guard:
+    build: ./disk-guard
+    container_name: disk-guard
+    volumes:
+      - suricata-logs:/var/log/suricata
+      - suricata-control:/var/lib/suricata-control
+      - disk-guard-state:/var/lib/disk-guard
+      # disk_guard.* keys. Shares the file with the responder so there is one
+      # place per host for site policy, not one per service.
+      - ./suricata.properties:/etc/tzsp-monitor/suricata.properties:ro
+    environment:
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=my-super-secret-token
+      - INFLUXDB_ORG=my-org
+      - INFLUXDB_BUCKET=network_traffic
+    depends_on:
+      - influxdb
+    logging: *logging
+    restart: unless-stopped
+
+  # --- Full traffic retention: every mirrored frame to rotating pcap files ---
+  #
+  # Joins tzsp-decap's namespace, like suricata, because tzsp0 is the one
+  # place every mirror converges already decapsulated -- and with the same
+  # consequence: recreating tzsp-decap means restarting this too. So rebuild it
+  # with --no-deps, or `up -d --build pcap-dump` recreates tzsp-decap first.
+  #
+  # Having no network identity of its own, its control API (8050, NOT
+  # published) is reached as http://tzsp-decap:8050 -- that is the URL the
+  # Packet Capture dashboard uses.
+  #
+  # Where the files go on the HOST is decided here, not in the property file:
+  # a container cannot choose its own bind mounts. PCAP_DIR in the git-ignored
+  # .env moves it (e.g. PCAP_DIR=/srv/pcap, a disk of its own); the default is
+  # ./pcap next to this file. pcap_dump.path is the directory *inside* the
+  # container and must be a mount -- the service refuses to write into its own
+  # writable layer, where a recreate would silently discard the capture.
+  pcap-dump:
+    build: ./pcap-dump
+    container_name: pcap-dump
+    network_mode: "service:tzsp-decap"
+    cap_add:
+      - NET_RAW   # AF_PACKET capture on the tap
+      - NET_ADMIN # promiscuous mode, and the 32 MB capture buffer (-B)
+    volumes:
+      - ${PCAP_DIR:-./pcap}:/pcap
+      # on/off, the CIDR filter and which filter each session ran under --
+      # owned by the dashboard, so it has to survive a recreate.
+      - pcap-dump-state:/var/lib/pcap-dump
+      # pcap_dump.* keys. No credentials.
+      - ./suricata.properties:/etc/tzsp-monitor/suricata.properties:ro
+    environment:
+      - TAP_INTERFACE=tzsp0
+      - PCAP_HOST_DIR=${PCAP_DIR:-./pcap}
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=my-super-secret-token
+      - INFLUXDB_ORG=my-org
+      - INFLUXDB_BUCKET=network_traffic
+    depends_on:
+      - tzsp-decap
+    logging: *logging
+    restart: unless-stopped
+
+  # --- ARP watch: IP -> MAC bindings, and ARP spoofing / poisoning ----------
+  #
+  # Reads ARP (and nothing else -- a BPF filter drops the rest in the kernel)
+  # off tzsp0, so like suricata and pcap-dump it joins tzsp-decap's namespace,
+  # with the same consequence: rebuild it with --no-deps, or `up -d --build
+  # arp-watch` recreates tzsp-decap first. A restarted tzsp-decap makes a new
+  # tap, and this service notices the new ifindex and reopens by itself.
+  #
+  # Headless and router-free, like wids: an ARP sender address is forgeable by
+  # anyone on the segment, so there is nothing here it would be safe to block.
+  arp-watch:
+    build: ./arp-watch
+    container_name: arp-watch
+    network_mode: "service:tzsp-decap"
+    cap_add:
+      - NET_RAW # AF_PACKET on the tap
+    volumes:
+      # Every IP -> MAC binding and every MAC ever heard, and the learned owner
+      # of each protected address: "changed" and "new" mean nothing without it.
+      - arp-watch-state:/var/lib/arp-watch
+      # The IEEE OUI registry, kept current by dns-resolver (the only writer);
+      # read here to tag every binding with its vendor.
+      - oui:/oui:ro
+      # arp_watch.* keys, and mikrotik.host / mikrotik.<name>.host -- the
+      # routers are protected addresses. No credentials are read.
+      - ./suricata.properties:/etc/tzsp-monitor/suricata.properties:ro
+    environment:
+      - TAP_INTERFACE=tzsp0
+      - OUI_DB=/oui/manuf
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=my-super-secret-token
+      - INFLUXDB_ORG=my-org
+      - INFLUXDB_BUCKET=network_traffic
+    depends_on:
+      - tzsp-decap
+    logging: *logging
+    restart: unless-stopped
+
+  # --- Wireless IDS: raw 802.11 over TZSP, from a radio in sniffer mode ------
+  #
+  # A branch of its own, not a consumer of tzsp0: a wireless sniffer streams
+  # TZSP whose payload is an 802.11 frame, which neither Suricata nor nfstream
+  # can read and a tap cannot carry. The sensor streams to <this host>:37008,
+  # the same port as the wired mirror -- the RouterOS wireless sniffer has no
+  # port setting -- and tzsp-decap steers the 802.11 onto a socket of its own
+  # and forwards it here, to 37009, with the sensor's address in a header.
+  # 37009 is therefore NOT published: only decap (and the selftest) send to it.
+  #
+  # depends_on is influxdb only, and it has its own namespace on the default
+  # network: it injects nothing anywhere (the frames are parsed, never put on
+  # an interface), so the reasons tzsp-decap is isolated do not apply, and
+  # `up -d --build wids` can never recreate the capture namespace.
+  #
+  # Headless, like dns-monitor and disk-guard: no HTTP server, and no path to
+  # the router -- an 802.11 source address is forgeable by anyone with a radio,
+  # so there is nothing here it would be safe to block.
+  wids:
+    build: ./wids
+    container_name: wids
+    cap_add:
+      - NET_ADMIN # only for SO_RCVBUFFORCE (receive buffer past rmem_max)
+    volumes:
+      # Every BSSID ever seen (so "new AP" means new, and a restart is not a
+      # beacon flood), the stations seen on our APs, signal baselines, sensors,
+      # and policy.json: our SSIDs and authorized BSSIDs, owned by the
+      # dashboard (its API is wids:8060, deliberately not published).
+      - wids-state:/var/lib/wids
+      # wids.* keys. No credentials.
+      - ./suricata.properties:/etc/tzsp-monitor/suricata.properties:ro
+    environment:
+      - WIDS_LISTEN_PORT=37009
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=my-super-secret-token
+      - INFLUXDB_ORG=my-org
+      - INFLUXDB_BUCKET=network_traffic
+    depends_on:
+      - influxdb
+    logging: *logging
+    restart: unless-stopped
+
+  # --- Alerting: run a shell command when a detector finds something ---
+  #
+  # Reads suricata_alert, dns_block, arp_alert, wids_alert, port_scan and
+  # ip_reputation_hit back out of InfluxDB and runs the command the Alerting
+  # dashboard sets (its API is alerter:8090, deliberately not published).
+  # A dashboard that sets a shell command is code execution for every Grafana
+  # login, so the container is built to leave a command nothing to take:
+  # commands run as nobody with an environment of their own, the filesystem is
+  # read-only apart from /tmp, and suricata.properties -- the router
+  # passwords -- is NOT mounted. Configuration is this environment instead.
+  alerter:
+    build: ./alerter
+    container_name: alerter
+    volumes:
+      - alerter-state:/var/lib/alerter # rules, commands, seen points, cooldowns
+    # Webhook tokens, as ALERT_SECRET_<NAME>=... lines, handed to every command
+    # as $ALERT_SECRET_<NAME> so they never have to be typed into the dashboard
+    # (which every viewer can read). Git-ignored; optional.
+    env_file:
+      - path: ./alerting.env
+        required: false
+    environment:
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=my-super-secret-token
+      - INFLUXDB_ORG=my-org
+      - INFLUXDB_BUCKET=network_traffic
+      - DNS_FILTER_URL=http://dns-filter:8040
+      # rw, or ro to make the dashboard read-only (commands keep running).
+      - ALERTING_CONTROL=${ALERTING_CONTROL:-rw}
+      # Shown to commands as $ALERT_SITE, and the base of $ALERT_URL.
+      - ALERTING_SITE=${ALERTING_SITE:-local}
+      - ALERTING_GRAFANA_URL=${ALERTING_GRAFANA_URL:-}
+      - ALERTING_POLL_SECONDS=${ALERTING_POLL_SECONDS:-30}
+      - ALERTING_REPEAT_SECONDS=${ALERTING_REPEAT_SECONDS:-3600}
+      - ALERTING_MAX_PER_MINUTE=${ALERTING_MAX_PER_MINUTE:-20}
+      - ALERTING_COMMAND_TIMEOUT=${ALERTING_COMMAND_TIMEOUT:-20}
+      # Also send every alert to a syslog server, RFC 5424 over UDP (empty =
+      # off): host, host:port or [v6]:port, 514 by default. Set it in .env.
+      - ALERTING_SYSLOG=${ALERTING_SYSLOG:-}
+      - ALERTING_SYSLOG_FACILITY=${ALERTING_SYSLOG_FACILITY:-local0}
+      - ALERTING_SYSLOG_MAX_BYTES=${ALERTING_SYSLOG_MAX_BYTES:-2048}
+      # Severity grading for the sources without one of their own; the
+      # defaults are in alerter.py (ALERTING_DNS_SEVERITY=malware=2,ads=4,*=4).
+      - ALERTING_DNS_SEVERITY=${ALERTING_DNS_SEVERITY:-}
+      - ALERTING_SCAN_SEVERITY=${ALERTING_SCAN_SEVERITY:-}
+      - ALERTING_REPUTATION_SEVERITY=${ALERTING_REPUTATION_SEVERITY:-}
+      - ALERTING_REPUTATION_CRITICAL_FEEDS=${ALERTING_REPUTATION_CRITICAL_FEEDS:-feodo}
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=64m
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID # drop to nobody for each command
+      - SETGID
+      - KILL # kill a timed-out command's whole process group (another uid)
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 256m
+    # Not dns-filter: its absence only delays DNS grading, and depending on it
+    # would make `up -d --build alerter` recreate it.
+    depends_on:
+      - influxdb
+    logging: *logging
+    restart: unless-stopped
+
+  haproxy:
+    build: ./haproxy
+    container_name: haproxy
+    ports:
+      - "443:443"
+    depends_on:
+      - grafana
+    user: root
+    volumes:
+      - ./haproxy/fullchain.pem:/etc/ssl/private/fullchain.pem:ro
+    logging: *logging
+    restart: unless-stopped
+
+volumes:
+  suricata-logs:
+  suricata-rules:
+  suricata-control:
+  suricata-dns:
+  responder-state:
+  disk-guard-state:
+  dns-filter-state:
+  pcap-dump-state:
+  wids-state:
+  ip-reputation-state:
+  geoip:
+  oui:
+  arp-watch-state:
+  alerter-state:

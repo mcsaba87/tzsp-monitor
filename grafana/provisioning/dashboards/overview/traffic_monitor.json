@@ -1,0 +1,651 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "type": "barchart",
+      "title": "Top Applications by Bandwidth (nDPI)",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"network_flow\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> filter(fn: (r) => r[\"_field\"] == \"bytes\")\n  |> group(columns: [\"application\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 10)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes",
+          "decimals": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "piechart",
+      "title": "TCP / UDP Traffic Ratio",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "pieType": "donut",
+        "displayLabels": [
+          "percent",
+          "name"
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"network_flow\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> filter(fn: (r) => r[\"_field\"] == \"bytes\")\n  |> filter(fn: (r) => r[\"protocol\"] == \"6\" or r[\"protocol\"] == \"17\")\n  |> group(columns: [\"protocol\"])\n  |> sum()\n  |> group()\n  |> map(fn: (r) => ({proto: if r.protocol == \"6\" then \"TCP\" else \"UDP\", _value: r._value, rk: \"ratio\"}))\n  |> pivot(rowKey: [\"rk\"], columnKey: [\"proto\"], valueColumn: \"_value\")\n  |> drop(columns: [\"rk\"])",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes",
+          "decimals": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "table",
+      "title": "Top 10 Talkers (Reverse DNS, Country)",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "id": 4,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Bytes"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "decbytes"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "ip",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^host.*$",
+            "renamePattern": "host"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^country.*$",
+            "renamePattern": "country"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "ip": 0,
+              "host": 1,
+              "country": 2,
+              "bytes": 3
+            },
+            "renameByName": {
+              "ip": "IP",
+              "host": "Hostname",
+              "country": "Country",
+              "bytes": "Bytes"
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 10)\n  |> rename(columns: {src_ip: \"ip\", _value: \"bytes\"})\n  |> keep(columns: [\"ip\", \"bytes\"])"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://dns-resolver:8000/resolve?ips=${top_talkers:csv}&site=${site}",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "ip",
+              "text": "ip",
+              "type": "string"
+            },
+            {
+              "selector": "host",
+              "text": "host",
+              "type": "string"
+            },
+            {
+              "selector": "country",
+              "text": "country",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Traffic Throughput (bits/s) over Time",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 2,
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nwindowSeconds = float(v: int(v: v.windowPeriod)) / 1000000000.0\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"network_flow\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> filter(fn: (r) => r[\"_field\"] == \"bytes\")\n  |> group()\n  |> aggregateWindow(every: v.windowPeriod, fn: sum, createEmpty: false)\n  // A per-bucket sum depends on the bucket width, so it was a raw count that\n  // changed with the zoom. Divide by the width to get a rate Grafana can scale.\n  |> map(fn: (r) => ({r with _value: float(v: r._value) * 8.0 / windowSeconds}))\n  |> yield(name: \"bits_per_second\")",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps",
+          "decimals": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Packet Rate (packets/s) over Time",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 5,
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nwindowSeconds = float(v: int(v: v.windowPeriod)) / 1000000000.0\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"network_flow\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> filter(fn: (r) => r[\"_field\"] == \"packets\")\n  |> group()\n  |> aggregateWindow(every: v.windowPeriod, fn: sum, createEmpty: false)\n  // A per-bucket sum depends on the bucket width, so it was a raw count that\n  // changed with the zoom. Divide by the width to get a rate Grafana can scale.\n  |> map(fn: (r) => ({r with _value: float(v: r._value) * 1.0 / windowSeconds}))\n  |> yield(name: \"packets_per_second\")",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "pps",
+          "decimals": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "geomap",
+      "title": "Traffic by Country (remote end)",
+      "id": 6,
+      "description": "Bytes exchanged with each country, by the country of the remote (public) end of each flow; marker size is the byte count. A flow between two public addresses counts toward its responder. Country from a local GeoIP database (IP geolocation by DB-IP, db-ip.com), written as tags by the collector: flows recorded before it had the database are not counted. Private and other non-public addresses are never a country. The base map is the country outline file Grafana itself ships (public/maps/countries.geojson), so nothing on this panel is fetched from the internet.",
+      "gridPos": {
+        "h": 11,
+        "w": 14,
+        "x": 0,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes",
+          "decimals": 1,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3987e5"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "name"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Country"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bytes"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Bytes"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "view": {
+          "id": "zero",
+          "lat": 25,
+          "lon": 10,
+          "zoom": 1.3,
+          "allLayers": true
+        },
+        "controls": {
+          "showZoom": true,
+          "mouseWheelZoom": false,
+          "showAttribution": false
+        },
+        "basemap": {
+          "type": "geojson",
+          "name": "Countries",
+          "config": {
+            "src": "public/maps/countries.geojson",
+            "rules": [],
+            "style": {
+              "color": {
+                "fixed": "#5a6170"
+              },
+              "opacity": 0.25,
+              "lineWidth": 1
+            }
+          }
+        },
+        "layers": [
+          {
+            "type": "markers",
+            "name": "Countries",
+            "tooltip": true,
+            "location": {
+              "mode": "lookup",
+              "lookup": "country",
+              "gazetteer": "public/gazetteer/countries.json"
+            },
+            "config": {
+              "showLegend": false,
+              "style": {
+                "size": {
+                  "field": "bytes",
+                  "fixed": 5,
+                  "min": 4,
+                  "max": 32
+                },
+                "color": {
+                  "fixed": "#3987e5"
+                },
+                "opacity": 0.6,
+                "symbol": {
+                  "mode": "fixed",
+                  "fixed": "img/icons/marker/circle.svg"
+                },
+                "symbolAlign": {
+                  "horizontal": "center",
+                  "vertical": "center"
+                },
+                "rotation": {
+                  "fixed": 0,
+                  "mode": "mod",
+                  "min": -360,
+                  "max": 360
+                }
+              }
+            }
+          }
+        ],
+        "tooltip": {
+          "mode": "details"
+        }
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "country",
+            "mode": "inner"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^name.*$",
+            "renamePattern": "name"
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\n// Bytes by the country of the REMOTE end, from the collector's src_country /\n// dst_country tags. A flow counts toward its responder's country when that is\n// public, otherwise toward its initiator's -- so outbound and inbound both\n// land, and a flow is never counted twice. Both halves are a tag regex plus a\n// tag group + sum, i.e. pushed down; flows from before the collector had a\n// GeoIP database have neither tag and are not counted at all.\noutbound = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> filter(fn: (r) => r.dst_country =~ /^[A-Z]{2}$/)\n  |> group(columns: [\"dst_country\"])\n  |> sum()\n  |> rename(columns: {dst_country: \"country\"})\n\ninbound = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> filter(fn: (r) => r.src_country =~ /^[A-Z]{2}$/ and r.dst_country !~ /^[A-Z]{2}$/)\n  |> group(columns: [\"src_country\"])\n  |> sum()\n  |> rename(columns: {src_country: \"country\"})\n\nunion(tables: [outbound, inbound])\n  |> group(columns: [\"country\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 250)\n  |> rename(columns: {_value: \"bytes\"})\n  |> keep(columns: [\"country\", \"bytes\"])"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://dns-resolver:8000/countries",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "cc",
+              "text": "country",
+              "type": "string"
+            },
+            {
+              "selector": "label",
+              "text": "name",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Top Countries (remote end)",
+      "id": 7,
+      "description": "The 15 countries most bytes were exchanged with, by the country of the remote (public) end of each flow. Country from a local GeoIP database (IP geolocation by DB-IP, db-ip.com), written as tags by the collector: flows recorded before it had the database are not counted. Private and other non-public addresses are never a country.",
+      "gridPos": {
+        "h": 11,
+        "w": 10,
+        "x": 14,
+        "y": 16
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Bytes",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "name"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Country"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bytes"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Bytes"
+              },
+              {
+                "id": "unit",
+                "value": "decbytes"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "country",
+            "mode": "inner"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^name.*$",
+            "renamePattern": "name"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "country": true
+            },
+            "indexByName": {
+              "name": 0,
+              "bytes": 1
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\n// Bytes by the country of the REMOTE end, from the collector's src_country /\n// dst_country tags. A flow counts toward its responder's country when that is\n// public, otherwise toward its initiator's -- so outbound and inbound both\n// land, and a flow is never counted twice. Both halves are a tag regex plus a\n// tag group + sum, i.e. pushed down; flows from before the collector had a\n// GeoIP database have neither tag and are not counted at all.\noutbound = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> filter(fn: (r) => r.dst_country =~ /^[A-Z]{2}$/)\n  |> group(columns: [\"dst_country\"])\n  |> sum()\n  |> rename(columns: {dst_country: \"country\"})\n\ninbound = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> filter(fn: (r) => r.src_country =~ /^[A-Z]{2}$/ and r.dst_country !~ /^[A-Z]{2}$/)\n  |> group(columns: [\"src_country\"])\n  |> sum()\n  |> rename(columns: {src_country: \"country\"})\n\nunion(tables: [outbound, inbound])\n  |> group(columns: [\"country\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 15)\n  |> rename(columns: {_value: \"bytes\"})\n  |> keep(columns: [\"country\", \"bytes\"])"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://dns-resolver:8000/countries",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "cc",
+              "text": "country",
+              "type": "string"
+            },
+            {
+              "selector": "label",
+              "text": "name",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": [
+    "network",
+    "ndpi",
+    "tzsp"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "site",
+        "type": "datasource",
+        "label": "Site",
+        "description": "Which tzsp-monitor instance these panels read. Remote sites are the REMOTE_SITE_* lines in properties.yml of the instance serving this Grafana; each is a datasource pointed at that site's own InfluxDB, so nothing is copied between sites. Controls never follow this box: rule suppression and reverse DNS only ever act on the local site, and are inert while another site is selected.",
+        "query": "influxdb",
+        "regex": "",
+        "current": {
+          "selected": false,
+          "text": "InfluxDB_Flux",
+          "value": "InfluxDB_Flux"
+        },
+        "options": [],
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1,
+        "skipUrlSync": false
+      },
+      {
+        "name": "cidr",
+        "type": "textbox",
+        "label": "CIDR filter",
+        "description": "Restrict every panel to traffic with either endpoint in this range, e.g. 10.12.0.0/16, 10.12.6.0/24, or a bare IP. Leave empty for no filter. Prefix lengths other than /8, /16, /24 and /32 round down to the enclosing octet boundary, so /20 behaves as /16 and may show a wider range than typed.",
+        "hide": 0,
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "skipUrlSync": false
+      },
+      {
+        "name": "top_talkers",
+        "type": "query",
+        "label": "Top talkers (internal)",
+        "description": "Hidden helper: the top-10 source IPs, fed to the reverse-DNS resolver.",
+        "hide": 2,
+        "datasource": {
+          "type": "influxdb",
+          "uid": "${site}"
+        },
+        "definition": "top 10 src_ip by bytes",
+        "query": "import \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 10)\n  |> keep(columns: [\"src_ip\"])\n  |> rename(columns: {src_ip: \"_value\"})",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": null,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "TZSP nDPI Network Monitor",
+  "version": 3,
+  "uid": "tzsp-network-monitor"
+}

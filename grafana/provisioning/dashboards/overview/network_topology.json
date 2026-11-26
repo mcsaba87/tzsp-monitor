@@ -1,0 +1,360 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "refresh": "",
+  "schemaVersion": 39,
+  "tags": [
+    "network",
+    "topology",
+    "tzsp"
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Network Topology",
+  "uid": "network-topology",
+  "version": 1,
+  "templating": {
+    "list": [
+      {
+        "name": "site",
+        "type": "datasource",
+        "label": "Site",
+        "description": "Which tzsp-monitor instance these panels read. Remote sites are the REMOTE_SITE_* lines in properties.yml of the instance serving this Grafana; each is a datasource pointed at that site's own InfluxDB, so nothing is copied between sites.",
+        "query": "influxdb",
+        "regex": "",
+        "current": {
+          "selected": false,
+          "text": "InfluxDB_Flux",
+          "value": "InfluxDB_Flux"
+        },
+        "options": [],
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1,
+        "skipUrlSync": false
+      },
+      {
+        "name": "cidr",
+        "type": "textbox",
+        "label": "CIDR filter",
+        "description": "Restrict the graph to links with an endpoint in this range (or both endpoints -- see Scope), e.g. 10.12.0.0/16, 10.12.6.0/24, or a bare IP. Leave empty for no filter. Prefix lengths other than /8, /16, /24 and /32 round down to the enclosing octet boundary, so /20 behaves as /16 and may show a wider range than typed.",
+        "hide": 0,
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "skipUrlSync": false
+      },
+      {
+        "name": "scope",
+        "type": "custom",
+        "label": "Scope",
+        "description": "either: every link touching the CIDR range, so its outside peers are drawn too. both: only links with both ends inside the range -- the internal topology of a subnet. Has no effect while the CIDR box is empty.",
+        "query": "either endpoint in range : either,both endpoints in range : both",
+        "hide": 0,
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "selected": true,
+          "text": "either endpoint in range",
+          "value": "either"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "either endpoint in range",
+            "value": "either"
+          },
+          {
+            "selected": false,
+            "text": "both endpoints in range",
+            "value": "both"
+          }
+        ],
+        "skipUrlSync": false
+      },
+      {
+        "name": "links",
+        "type": "custom",
+        "label": "Links drawn",
+        "description": "How many of the busiest links (by bytes) to draw. Nodes are the endpoints of those links. Past a few hundred the layout becomes a hairball and the browser slows down; narrow with the CIDR box instead of raising this.",
+        "query": "50,100,200,400",
+        "hide": 0,
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "selected": true,
+          "text": "100",
+          "value": "100"
+        },
+        "options": [
+          {
+            "selected": false,
+            "text": "50",
+            "value": "50"
+          },
+          {
+            "selected": true,
+            "text": "100",
+            "value": "100"
+          },
+          {
+            "selected": false,
+            "text": "200",
+            "value": "200"
+          },
+          {
+            "selected": false,
+            "text": "400",
+            "value": "400"
+          }
+        ],
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "nodeGraph",
+      "title": "Topology -- busiest $links links",
+      "description": "One node per host, one arrow per (initiator -> responder) pair, drawn for the busiest links in range. Node: total bytes on the drawn links, and how many of them it has. The ring splits those bytes by role -- blue for connections the host opened, green for connections it answered -- so a server is mostly green and a workstation mostly blue. Edge thickness is log-scaled bytes. A public address is labelled with its country (\"public · DE\"), from the GeoIP tags the collector writes; flows recorded before it had a GeoIP database carry none, so those read just \"public\". Click a node for its menu (host drilldown, country). IP geolocation by DB-IP (db-ip.com).",
+      "gridPos": {
+        "h": 24,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "options": {
+        "nodes": {
+          "arcs": [
+            {
+              "field": "arc__client",
+              "color": "#3987e5"
+            },
+            {
+              "field": "arc__server",
+              "color": "#199e70"
+            }
+          ]
+        },
+        "layoutAlgorithm": "force",
+        "zoomMode": "cooperative"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "title"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Host drilldown for ${__data.fields.id}",
+                    "url": "/d/host-drilldown?${__url_time_range}&${site:queryparam}&var-ip=${__data.fields.id}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"dict\"\nimport \"math\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary, so the\n// range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\n// \"both\" narrows to links that stay inside the range. It is a second regex\n// filter rather than a conditional inside one, because a conditional does not\n// push down and two chained tag regexes do.\nbothRe = if \"${scope}\" == \"both\" then cidrRe else /.*/\n\n// A link is a (src_ip, dst_ip) pair. nfstream flows are bidirectional with the\n// initiator as src, so the arrow means \"opened connections to\", and the bytes\n// are both directions. Only the busiest ${links} links are drawn: the node graph\n// is unreadable long before Grafana's own limits, and the production mirror has\n// ~3.5k hosts.\nlinks = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> filter(fn: (r) => r.src_ip =~ bothRe and r.dst_ip =~ bothRe)\n  |> group(columns: [\"src_ip\", \"dst_ip\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: ${links})\n  |> map(fn: (r) => ({r with _value: float(v: r._value)}))\n\n// Country of every drawn endpoint, from the collector's src_country/dst_country\n// tags. Only the (at most 2 x ${links}) addresses actually drawn are looked up:\n// they become one anchored regex, which pushes down like the CIDR one, and\n// group + last() per address pushes down too -- so this reads the last block\n// of a few series, not the range again. Flows written before the collector had\n// a GeoIP database carry no tag, so a host seen only then has no country.\ndrawn = union(tables: [\n    links |> map(fn: (r) => ({r with ip: r.src_ip})),\n    links |> map(fn: (r) => ({r with ip: r.dst_ip})),\n  ])\n  |> keep(columns: [\"ip\"])\n  |> group()\n  |> unique(column: \"ip\")\n  |> findColumn(fn: (key) => true, column: \"ip\")\ndrawnRe = regexp.compile(v: \"^(\" + strings.joinStr(arr: array.map(arr: drawn, fn: (x) => regexp.quoteMeta(v: x)), v: \"|\") + \")$\")\nccFlows = () => from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\nccPairs = union(tables: [\n    ccFlows()\n      |> filter(fn: (r) => r.dst_ip =~ drawnRe and r.dst_country =~ /^[A-Z]{2}$/)\n      |> group(columns: [\"dst_ip\", \"dst_country\"])\n      |> last()\n      |> map(fn: (r) => ({r with kv: r.dst_ip + \"=\" + r.dst_country})),\n    ccFlows()\n      |> filter(fn: (r) => r.src_ip =~ drawnRe and r.src_country =~ /^[A-Z]{2}$/)\n      |> group(columns: [\"src_ip\", \"src_country\"])\n      |> last()\n      |> map(fn: (r) => ({r with kv: r.src_ip + \"=\" + r.src_country})),\n  ])\n  |> keep(columns: [\"kv\"])\n  |> group()\n  |> unique(column: \"kv\")\n  |> findColumn(fn: (key) => true, column: \"kv\")\ncountries = dict.fromList(pairs: array.map(arr: ccPairs, fn: (x) => {\n    p = strings.split(v: x, t: \"=\")\n    return {key: p[0], value: p[1]}\n}))\n\n// The node graph prints a number as toFixed(2) plus its unit taken literally\n// (\"9948.00 bytes\"), whatever the field config or panel options say, and passes\n// strings through untouched -- so the stats are formatted here, in the same\n// binary units the table uses.\nhuman = (b) =>\n  if b >= 1073741824.0 then string(v: math.round(x: b / 107374182.4) / 10.0) + \" GiB\"\n  else if b >= 1048576.0 then string(v: math.round(x: b / 104857.6) / 10.0) + \" MiB\"\n  else if b >= 1024.0 then string(v: math.round(x: b / 102.4) / 10.0) + \" KiB\"\n  else string(v: int(v: b)) + \" B\"\n\n// Edges: the node graph recognises this frame by its source/target fields.\n// Thickness is log-scaled -- 10 kB is 1px, 1 GB and up is 8px -- because\n// byte counts here span seven orders of magnitude.\nlinks\n  |> map(fn: (r) => ({r with\n      id: r.src_ip + \" > \" + r.dst_ip,\n      source: r.src_ip,\n      target: r.dst_ip,\n      mainstat: human(b: r._value),\n      thickness: math.mMax(x: 1.0, y: math.mMin(x: 8.0, y: math.log10(x: r._value) - 3.0))}))\n  |> keep(columns: [\"id\", \"source\", \"target\", \"mainstat\", \"thickness\"])\n  |> yield(name: \"edges\")\n\n// Nodes are derived from the drawn links, not read again, so every edge has\n// both of its ends and no node is left floating. map/reduce are fine here: they\n// run on at most two rows per link, after the pushdown aggregate.\nunion(tables: [\n    links |> map(fn: (r) => ({r with id: r.src_ip, client: r._value, server: 0.0})),\n    links |> map(fn: (r) => ({r with id: r.dst_ip, client: 0.0, server: r._value})),\n  ])\n  |> keep(columns: [\"id\", \"client\", \"server\"])\n  |> group(columns: [\"id\"])\n  |> reduce(\n      identity: {client: 0.0, server: 0.0, links: 0},\n      fn: (r, accumulator) => ({\n        client: accumulator.client + r.client,\n        server: accumulator.server + r.server,\n        links: accumulator.links + 1}))\n  |> group()\n  |> map(fn: (r) => ({r with\n      title: r.id,\n      subtitle:\n        if strings.containsStr(v: r.id, substr: \":\") then \"IPv6\"\n        else if r.id == \"0.0.0.0\" then \"unspecified\"\n        else if r.id =~ /^(22[4-9]|23[0-9])\\./ then \"multicast\"\n        else if r.id =~ /^255\\./ or r.id =~ /\\.255$/ then \"broadcast\"\n        else if r.id =~ /^(10\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.)/\n          then regexp.replaceAllString(r: /\\.[0-9]+$/, v: r.id, t: \".0/24\")\n        else if dict.get(dict: countries, key: r.id, default: \"\") != \"\"\n          then \"public · \" + dict.get(dict: countries, key: r.id, default: \"\")\n        else \"public\",\n      detail__country: dict.get(dict: countries, key: r.id, default: \"\"),\n      mainstat: human(b: r.client + r.server),\n      secondarystat: string(v: r.links) + (if r.links == 1 then \" link\" else \" links\"),\n      arc__client: r.client / (r.client + r.server),\n      arc__server: r.server / (r.client + r.server)}))\n  |> keep(columns: [\"id\", \"title\", \"subtitle\", \"mainstat\", \"secondarystat\", \"detail__country\", \"arc__client\", \"arc__server\"])\n  |> yield(name: \"nodes\")\n"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Drawn Links",
+      "description": "The links the graph draws, as a table: the same query, so the two always agree. Click an address to open its host drilldown. Country is the endpoint's GeoIP country (public addresses only).",
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "id": 2,
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Bytes",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "source"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Initiator"
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Host drilldown for ${__value.raw}",
+                    "url": "/d/host-drilldown?${__url_time_range}&${site:queryparam}&var-ip=${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "target"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Responder"
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Host drilldown for ${__value.raw}",
+                    "url": "/d/host-drilldown?${__url_time_range}&${site:queryparam}&var-ip=${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bytes"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Bytes"
+              },
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "source_country"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Initiator country"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "target_country"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Responder country"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"dict\"\nimport \"math\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary, so the\n// range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\n// \"both\" narrows to links that stay inside the range. It is a second regex\n// filter rather than a conditional inside one, because a conditional does not\n// push down and two chained tag regexes do.\nbothRe = if \"${scope}\" == \"both\" then cidrRe else /.*/\n\n// A link is a (src_ip, dst_ip) pair. nfstream flows are bidirectional with the\n// initiator as src, so the arrow means \"opened connections to\", and the bytes\n// are both directions. Only the busiest ${links} links are drawn: the node graph\n// is unreadable long before Grafana's own limits, and the production mirror has\n// ~3.5k hosts.\nlinks = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> filter(fn: (r) => r.src_ip =~ bothRe and r.dst_ip =~ bothRe)\n  |> group(columns: [\"src_ip\", \"dst_ip\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: ${links})\n  |> map(fn: (r) => ({r with _value: float(v: r._value)}))\n\n// Country of every drawn endpoint, from the collector's src_country/dst_country\n// tags. Only the (at most 2 x ${links}) addresses actually drawn are looked up:\n// they become one anchored regex, which pushes down like the CIDR one, and\n// group + last() per address pushes down too -- so this reads the last block\n// of a few series, not the range again. Flows written before the collector had\n// a GeoIP database carry no tag, so a host seen only then has no country.\ndrawn = union(tables: [\n    links |> map(fn: (r) => ({r with ip: r.src_ip})),\n    links |> map(fn: (r) => ({r with ip: r.dst_ip})),\n  ])\n  |> keep(columns: [\"ip\"])\n  |> group()\n  |> unique(column: \"ip\")\n  |> findColumn(fn: (key) => true, column: \"ip\")\ndrawnRe = regexp.compile(v: \"^(\" + strings.joinStr(arr: array.map(arr: drawn, fn: (x) => regexp.quoteMeta(v: x)), v: \"|\") + \")$\")\nccFlows = () => from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\nccPairs = union(tables: [\n    ccFlows()\n      |> filter(fn: (r) => r.dst_ip =~ drawnRe and r.dst_country =~ /^[A-Z]{2}$/)\n      |> group(columns: [\"dst_ip\", \"dst_country\"])\n      |> last()\n      |> map(fn: (r) => ({r with kv: r.dst_ip + \"=\" + r.dst_country})),\n    ccFlows()\n      |> filter(fn: (r) => r.src_ip =~ drawnRe and r.src_country =~ /^[A-Z]{2}$/)\n      |> group(columns: [\"src_ip\", \"src_country\"])\n      |> last()\n      |> map(fn: (r) => ({r with kv: r.src_ip + \"=\" + r.src_country})),\n  ])\n  |> keep(columns: [\"kv\"])\n  |> group()\n  |> unique(column: \"kv\")\n  |> findColumn(fn: (key) => true, column: \"kv\")\ncountries = dict.fromList(pairs: array.map(arr: ccPairs, fn: (x) => {\n    p = strings.split(v: x, t: \"=\")\n    return {key: p[0], value: p[1]}\n}))\n\n// Private and other non-public addresses have no country and stay blank.\nlinks\n  |> map(fn: (r) => ({r with\n      source_country: dict.get(dict: countries, key: r.src_ip, default: \"\"),\n      target_country: dict.get(dict: countries, key: r.dst_ip, default: \"\")}))\n  |> keep(columns: [\"src_ip\", \"source_country\", \"dst_ip\", \"target_country\", \"_value\"])\n  |> rename(columns: {src_ip: \"source\", dst_ip: \"target\", _value: \"bytes\"})\n"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "source": 0,
+              "source_country": 1,
+              "target": 2,
+              "target_country": 3,
+              "bytes": 4
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

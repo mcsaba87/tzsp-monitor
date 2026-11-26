@@ -1,0 +1,68 @@
+# Override for a host whose mirror arrives as VXLAN (the  instance, fed by
+# an  virtual network TAP) instead of TZSP:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.vxlan.yml up -d --build
+#
+# or, so plain `docker compose ...` keeps working on that host, put this in a
+# git-ignored .env next to the compose file:
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.vxlan.yml
+#
+# It does two things, and the second is the one that is easy to miss:
+#
+# 1. vxlan-tzsp re-wraps the VXLAN stream as TZSP and sends it to tzsp-decap,
+#    so Suricata, the responder and dns-monitor see the inner traffic unchanged.
+#
+# 2. The collector moves onto tzsp-decap's tap. nfstream decodes TZSP but not
+#    VXLAN, and the converted TZSP travels container to container -- it never
+#    crosses the physical NIC -- so a collector left sniffing that NIC would
+#    report the whole mirror as one flow between the two tunnel endpoints. On
+#    the tap it sees the decapsulated frames, exactly what Suricata sees.
+#    Consequence: like suricata, the collector now lives in tzsp-decap's
+#    network namespace, so recreating tzsp-decap means restarting both.
+
+services:
+  vxlan-tzsp:
+    build: ./vxlan-tzsp
+    container_name: vxlan-tzsp
+    ports:
+      # The TAP's destination port (4789 unless the TAP configuration says
+      # otherwise). Conflicts with Docker Swarm's overlay networking if the host
+      # uses it. 's NSG on this VM must allow it in from the tapped NICs.
+      - "4789:4789/udp"
+    cap_add:
+      - NET_ADMIN # SO_RCVBUFFORCE, for a receive buffer past net.core.rmem_max
+    environment:
+      - TZSP_HOST=tzsp-decap
+      - TZSP_PORT=37008
+      # Forward only these VNIs (comma-separated); empty forwards all.
+      - VXLAN_VNIS=
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=my-super-secret-token
+      - INFLUXDB_ORG=my-org
+      - INFLUXDB_BUCKET=network_traffic
+    # Not tzsp-decap: depending on it would make `up -d --build vxlan-tzsp`
+    # recreate it, and with it the namespace suricata and the collector live
+    # in. The converter re-resolves tzsp-decap on every stats tick, so start
+    # order does not matter.
+    depends_on:
+      - influxdb
+    # Written out: YAML anchors do not reach across compose files, so the
+    # x-logging anchor in docker-compose.yml cannot be referenced from here.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+  collector:
+    network_mode: "service:tzsp-decap"
+    environment:
+      # tzsp-decap is on the compose network, so localhost no longer reaches
+      # InfluxDB from in here.
+      - INFLUXDB_URL=http://influxdb:8086
+      - SNIFF_INTERFACE=tzsp0
+    depends_on:
+      - influxdb
+      - tzsp-decap

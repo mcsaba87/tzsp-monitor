@@ -1,0 +1,35 @@
+apiVersion: 1
+
+datasources:
+  - name: InfluxDB_Flux
+    type: influxdb
+    uid: InfluxDB_Flux  # pinned so dashboard panels (which reference this uid) resolve reliably
+    access: proxy
+    url: http://influxdb:8086
+    jsonData:
+      version: Flux
+      organization: my-org
+      defaultBucket: network_traffic
+    secureJsonData:
+      token: my-super-secret-token
+    isDefault: true
+
+  # Used to call the dns-resolver sidecar for reverse-DNS lookups.
+  - name: Infinity
+    type: yesoreyeram-infinity-datasource
+    uid: infinity
+    access: proxy
+    isDefault: false
+
+  # Not for queries: the browser downloads extracted captures through Grafana's
+  # datasource proxy, /api/datasources/proxy/uid/pcap-extract/extract?..., which
+  # is the only way a browser reaches pcap-dump (it is unpublished and lives in
+  # tzsp-decap's namespace) and the reason a download needs a Grafana login.
+  # Port 8051 is pcap-dump's read-only listener: proxying the control port 8050
+  # instead would hand every logged-in user a raw way to switch capture on.
+  - name: pcap-extract
+    type: yesoreyeram-infinity-datasource
+    uid: pcap-extract
+    access: proxy
+    url: http://tzsp-decap:8051
+    isDefault: false

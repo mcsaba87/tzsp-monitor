@@ -1,0 +1,2216 @@
+{
+  "uid": "packet-capture",
+  "title": "Packet Capture",
+  "description": "Full traffic retention: switch the pcap recording of the mirror on and off, restrict it to networks, and list the files it has written. This dashboard is a control surface, not a report -- the file table performs the changes in the boxes above it. The Download section below takes one host's traffic back out of the files, re-filtered by tcpdump, as a pcap or as tcpdump's text output.",
+  "tags": [
+    "network",
+    "tzsp",
+    "pcap",
+    "forensics",
+    "security"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 36,
+  "version": 1,
+  "refresh": "1m",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "annotations": {
+    "list": []
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "dump",
+        "type": "custom",
+        "label": "Capture",
+        "description": "Turn the recording on or off. A desired state rather than a one-off click: it stays set, is re-sent on every refresh, and pcap-dump only acts when it does not already match. `-` changes nothing, which is what a viewer who has never touched it sends.",
+        "query": "-,on,off",
+        "multi": false,
+        "includeAll": false,
+        "options": [
+          {
+            "selected": true,
+            "text": "-",
+            "value": "-"
+          },
+          {
+            "selected": false,
+            "text": "on",
+            "value": "on"
+          },
+          {
+            "selected": false,
+            "text": "off",
+            "value": "off"
+          }
+        ],
+        "current": {
+          "selected": true,
+          "text": "-",
+          "value": "-"
+        },
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "dump_cidr",
+        "type": "textbox",
+        "label": "Capture CIDR",
+        "description": "Keep only frames with either endpoint in these networks, e.g. `10.12.0.0/16, 192.168.1.5`. `all` removes the filter. Empty changes nothing -- the box is re-sent on every refresh, so an empty one must not mean 'everything'.",
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "dl_host",
+        "type": "textbox",
+        "label": "Download host",
+        "description": "The host whose traffic the Download buttons extract: an IP, a CIDR, or several comma-separated. Either endpoint matches, 802.1Q-tagged frames included. Unlike the capture boxes this one changes nothing on the server -- it only builds the download link -- so it is safe to leave filled in.",
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "dl_proto",
+        "type": "custom",
+        "label": "Download protocol",
+        "description": "Keep only this protocol of the host's traffic. icmp, gre and ospf cover IPv6 too (icmp6 for icmp). `any` = every protocol. Like the host box it only builds the download link.",
+        "query": "any,tcp,udp,icmp,gre,ospf",
+        "multi": false,
+        "includeAll": false,
+        "hide": 0,
+        "current": {
+          "selected": true,
+          "text": "any",
+          "value": "any"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "any",
+            "value": "any"
+          },
+          {
+            "selected": false,
+            "text": "tcp",
+            "value": "tcp"
+          },
+          {
+            "selected": false,
+            "text": "udp",
+            "value": "udp"
+          },
+          {
+            "selected": false,
+            "text": "icmp",
+            "value": "icmp"
+          },
+          {
+            "selected": false,
+            "text": "gre",
+            "value": "gre"
+          },
+          {
+            "selected": false,
+            "text": "ospf",
+            "value": "ospf"
+          }
+        ],
+        "skipUrlSync": false
+      },
+      {
+        "name": "dl_port",
+        "type": "textbox",
+        "label": "Download port",
+        "description": "Keep only this port, source or destination, so both directions come out: `443`, or a range `8000-8100`. With protocol `any` it means TCP or UDP; with icmp/gre/ospf, which have no ports, the download is refused. Empty = every port.",
+        "hide": 0,
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "skipUrlSync": false
+      },
+      {
+        "name": "dl_bpf",
+        "type": "textbox",
+        "label": "Download BPF",
+        "description": "Optional tcpdump expression for anything the protocol and port boxes cannot say, ANDed onto them, e.g. `not port 22` or `tcp[tcpflags] & tcp-syn != 0`. Write it as for an untagged frame; tagged frames are matched too unless the expression names `vlan` itself. Empty = no extra condition.",
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "hide": 0,
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Capture",
+      "description": "What pcap-dump is doing right now. CAPTURING: tcpdump is writing every mirrored frame that matches the filter. OFF: switched off from this dashboard (or never switched on). PAUSED - DISK: the filesystem reached pcap_dump.max_disk_percent and not even one file fits, so capture stopped rather than fill the disk; it resumes by itself once there is room for two files. ERROR: wanted on but not running -- the reason is in the Capture Control tile below. NO ANSWER means the service itself is down.",
+      "id": 1,
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://tzsp-decap:8050/status",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "state_code",
+              "text": "state_code",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "NO ANSWER"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "state_code"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Capture"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "OFF",
+                        "color": "#9ca3af",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "CAPTURING",
+                        "color": "#0ca30c",
+                        "index": 1
+                      },
+                      "2": {
+                        "text": "PAUSED - DISK",
+                        "color": "#ec835a",
+                        "index": 2
+                      },
+                      "3": {
+                        "text": "ERROR",
+                        "color": "#d03b3b",
+                        "index": 3
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 13,
+          "valueSize": 30
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Filter",
+      "description": "Which traffic is written: a frame is kept when either endpoint is inside one of these networks (802.1Q-tagged frames included). 'all traffic' means no filter. Set it with the 'Capture CIDR' box; every filter change starts a new set of files, so each file was captured under exactly one filter.",
+      "id": 2,
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 4,
+        "y": 0
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://tzsp-decap:8050/status",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "filter",
+              "text": "filter",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "NO ANSWER"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "filter"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Keeping"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3b82f6"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^(filter|Keeping)$/",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 13,
+          "valueSize": 20
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Stored",
+      "description": "Bytes of pcap on disk, and how much of pcap_dump.max_bytes that is. The files are a ring: once the budget is reached the oldest finished file is deleted for every new one, so sitting near 100% is the normal steady state, not a problem.",
+      "id": 3,
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 9,
+        "y": 0
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://tzsp-decap:8050/status",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "bytes",
+              "text": "bytes",
+              "type": "number"
+            },
+            {
+              "selector": "budget_used_pct",
+              "text": "budget_used_pct",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "NO ANSWER"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bytes"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "On disk"
+              },
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#9ca3af",
+                      "value": null
+                    },
+                    {
+                      "color": "#3b82f6",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "budget_used_pct"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Of budget"
+              },
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#3b82f6",
+                      "value": null
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 13,
+          "valueSize": 26
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "History Kept",
+      "description": "How far back the capture reaches: the age of the first packet in the oldest file still on disk, and how many files there are. This is the number that answers 'can I still get the packets from that incident?' -- at a steady rate it is the budget divided by the write rate.",
+      "id": 4,
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 13,
+        "y": 0
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://tzsp-decap:8050/status",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "retained_seconds",
+              "text": "retained_seconds",
+              "type": "number"
+            },
+            {
+              "selector": "files",
+              "text": "files",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "NO ANSWER"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "retained_seconds"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Back to"
+              },
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "-1": {
+                        "text": "NOTHING YET",
+                        "color": "#9ca3af",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#3b82f6",
+                      "value": null
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "files"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Files"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#9ca3af",
+                      "value": null
+                    },
+                    {
+                      "color": "#3b82f6",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 13,
+          "valueSize": 26
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Disk",
+      "description": "How full the filesystem holding the capture directory is, as df prints it. Capture may only grow while this stays under pcap_dump.max_disk_percent (80 by default -- below disk-guard's 85/90 on purpose, so the capture yields first). The colour turns amber 10 points before that and orange at it.",
+      "id": 5,
+      "gridPos": {
+        "h": 5,
+        "w": 3,
+        "x": 17,
+        "y": 0
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://tzsp-decap:8050/status",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "disk_percent",
+              "text": "disk_percent",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "NO ANSWER"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "disk_percent"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Used"
+              },
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#0ca30c",
+                      "value": null
+                    },
+                    {
+                      "color": "#fab219",
+                      "value": 70
+                    },
+                    {
+                      "color": "#ec835a",
+                      "value": 80
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 13,
+          "valueSize": 26
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Dropped",
+      "description": "Frames the kernel dropped before tcpdump could write them, over the selected time range. Anything above zero means the disk (or the capture buffer) could not keep up with the mirror and the files have holes in them. Not the same as tzsp-decap's UDP drops on the Suricata dashboard, which happen before the frame ever reaches the tap.",
+      "id": 6,
+      "gridPos": {
+        "h": 5,
+        "w": 3,
+        "x": 20,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "InfluxDB_Flux"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "InfluxDB_Flux"
+          },
+          "query": "import \"array\"\n\n// tcpdump's own \"dropped by kernel\" counter, written as deltas (tcpdump\n// restarts with every filter change, which zeroes it). A climbing number\n// means the disk cannot keep up with the mirror and the files have holes.\n// The -1 sentinel keeps a stopped service from reading as a clean zero.\ndata = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"pcap_dump\" and r._field == \"dropped\")\n  |> sum()\n  |> group()\n  |> sum()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [data, array.from(rows: [{_value: -1}])])\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "NO ANSWER"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "_value"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Frames"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "-1": {
+                        "text": "NO DATA",
+                        "color": "#9ca3af",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#0ca30c",
+                      "value": null
+                    },
+                    {
+                      "color": "#ec835a",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 13,
+          "valueSize": 30
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 7,
+      "title": "Write Rate",
+      "description": "Bytes per second written to pcap files, and frames per second the kernel dropped (right axis). The write rate is what decides how much history the budget buys: History Kept is roughly the budget divided by it.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "InfluxDB_Flux"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "InfluxDB_Flux"
+          },
+          "query": "import \"array\"\n\n// ~96 buckets however far you zoom, floored at the service's 30s stats\n// interval, below which there is nothing finer to show; labelled with the\n// bucket's start so zooming onto a bar selects what drew it.\nspanNs = int(v: v.timeRangeStop) - int(v: v.timeRangeStart)\neveryNs = if spanNs / 96 < 30000000000 then 30000000000 else spanNs / 96\nevery = duration(v: everyNs)\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"pcap_dump\" and r._field == \"written_bytes\")\n  |> aggregateWindow(every: every, fn: sum, timeSrc: \"_start\", createEmpty: false)\n  |> map(fn: (r) => ({r with _value: float(v: r._value) / (float(v: everyNs) / 1000000000.0)}))\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])\n"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "InfluxDB_Flux"
+          },
+          "query": "// ~96 buckets however far you zoom, floored at the service's 30s stats\n// interval, below which there is nothing finer to show; labelled with the\n// bucket's start so zooming onto a bar selects what drew it.\nspanNs = int(v: v.timeRangeStop) - int(v: v.timeRangeStart)\neveryNs = if spanNs / 96 < 30000000000 then 30000000000 else spanNs / 96\nevery = duration(v: everyNs)\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"pcap_dump\" and r._field == \"dropped\")\n  |> aggregateWindow(every: every, fn: sum, timeSrc: \"_start\", createEmpty: false)\n  |> map(fn: (r) => ({r with _value: float(v: r._value) / (float(v: everyNs) / 1000000000.0)}))\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "decimals": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "axisSoftMin": 0,
+            "barAlignment": 1,
+            "spanNulls": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*written_bytes.*"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "written"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3b82f6"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*dropped.*"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "dropped (frames/s)"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#ec835a"
+                }
+              },
+              {
+                "id": "unit",
+                "value": "pps"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 8,
+      "title": "Stored vs Budget",
+      "description": "Bytes on disk against the configured budget (pcap_dump.max_bytes) and the allowance actually in force. The allowance falls below the budget when the filesystem nears pcap_dump.max_disk_percent for any reason -- the ring then shrinks to make room, oldest files first.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "InfluxDB_Flux"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "InfluxDB_Flux"
+          },
+          "query": "// ~96 buckets however far you zoom, floored at the service's 30s stats\n// interval, below which there is nothing finer to show; labelled with the\n// bucket's start so zooming onto a bar selects what drew it.\nspanNs = int(v: v.timeRangeStop) - int(v: v.timeRangeStart)\neveryNs = if spanNs / 96 < 30000000000 then 30000000000 else spanNs / 96\nevery = duration(v: everyNs)\n\n// The allowance is the budget, or what the files hold plus what the disk can\n// still take under pcap_dump.max_disk_percent -- whichever is smaller. When\n// it drops below the budget line, something else is filling the disk and the\n// capture is giving way to it.\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"pcap_dump\")\n  |> filter(fn: (r) => r._field == \"bytes\" or r._field == \"allowance_bytes\" or r._field == \"budget_bytes\")\n  |> aggregateWindow(every: every, fn: last, timeSrc: \"_start\", createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "axisSoftMin": 0,
+            "barAlignment": 1,
+            "spanNulls": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*allowance_bytes.*"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "allowance"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#fab219"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*budget_bytes.*"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "budget"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9ca3af"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^bytes$"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "stored"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3b82f6"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Capture Control",
+      "description": "State of the pcap-dump service itself. READ-ONLY is pcap_dump.control_enabled = false: the file list still renders, but no box changes anything. Detail explains an ERROR: most often the destination is not a mounted directory, or tzsp0 is missing because tzsp-decap was recreated and pcap-dump has to be restarted with it.",
+      "id": 9,
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 0,
+        "y": 13
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://tzsp-decap:8050/status",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "control_enabled",
+              "text": "control_enabled",
+              "type": "number"
+            },
+            {
+              "selector": "error",
+              "text": "error",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "NO ANSWER"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "control_enabled"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Actions"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "READ-ONLY",
+                        "color": "#9ca3af",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "WRITABLE",
+                        "color": "#0ca30c",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "error"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Detail"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "special",
+                    "options": {
+                      "match": "empty",
+                      "result": {
+                        "text": "OK",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9ca3af"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^(control_enabled|error|Actions|Detail)$/",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 13,
+          "valueSize": 16
+        }
+      }
+    },
+    {
+      "type": "text",
+      "title": "How packet capture works",
+      "id": 10,
+      "gridPos": {
+        "h": 5,
+        "w": 16,
+        "x": 8,
+        "y": 13
+      },
+      "options": {
+        "mode": "markdown",
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "**Turn it on or off:** the `Capture` box. Like the web filter's switch it is a *state*, not a click -- it stays where you leave it and is re-sent on every refresh; `-` changes nothing, which is what a viewer who never touched it sends.\n\n**Restrict it:** type one or more networks into `Capture CIDR` (`10.12.0.0/16`, `10.12.6.7`, comma-separated) -- a frame is kept if either end is inside. Any prefix length is exact here. `all` removes the filter; an empty box changes nothing. Every change starts a new set of files.\n\n**Get the files:** they are plain Ethernet pcaps (decapsulated -- open them in Wireshark as they are) in the directory shown in the table, on the monitor host (`PCAP_DIR`, default `./pcap` next to docker-compose.yml). Size and budget are `pcap_dump.*` in suricata.properties; when the budget is full the oldest file goes. To take **one host's traffic** back out of them -- as a pcap or as tcpdump text -- use the Download section below.\n\n**A full capture holds every cleartext password and file on the wire, and anyone who can view this dashboard can start one** -- the call runs with the datasource's identity, not the viewer's. Every change is in the audit table at the bottom; `pcap_dump.control_enabled = false` makes this read-only."
+      }
+    },
+    {
+      "type": "table",
+      "title": "Capture Files (newest first)",
+      "description": "Every pcap file on disk, straight from pcap-dump -- and this panel is also what applies the Capture and Capture CIDR boxes, so what you see is the state after the change. WRITING is the file tcpdump has open; it is renamed to its final -NNNN.pcap name when tcpdump moves on. Times are UTC: First packet comes from the file itself, Last write is its mtime. Host path is where it is on the monitor host (relative paths are relative to the docker-compose.yml directory).",
+      "id": 11,
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://tzsp-decap:8050/apply?dump=${dump}&cidr=${dump_cidr:percentencode}",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "file",
+              "text": "file",
+              "type": "string"
+            },
+            {
+              "selector": "state",
+              "text": "state",
+              "type": "string"
+            },
+            {
+              "selector": "bytes",
+              "text": "bytes",
+              "type": "number"
+            },
+            {
+              "selector": "first_packet",
+              "text": "first_packet",
+              "type": "string"
+            },
+            {
+              "selector": "last_write",
+              "text": "last_write",
+              "type": "string"
+            },
+            {
+              "selector": "filter",
+              "text": "filter",
+              "type": "string"
+            },
+            {
+              "selector": "host_path",
+              "text": "host_path",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "file": 0,
+              "state": 1,
+              "bytes": 2,
+              "first_packet": 3,
+              "last_write": 4,
+              "filter": 5,
+              "host_path": 6
+            },
+            "renameByName": {
+              "file": "File",
+              "state": "State",
+              "bytes": "Size",
+              "first_packet": "First packet (UTC)",
+              "last_write": "Last write (UTC)",
+              "filter": "Filter",
+              "host_path": "Host path"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "File"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 270
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "State"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "writing": {
+                        "text": "WRITING",
+                        "color": "#3b82f6",
+                        "index": 0
+                      },
+                      "complete": {
+                        "text": "COMPLETE",
+                        "color": "#0ca30c",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Size"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "First packet (UTC)"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 175
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last write (UTC)"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 175
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Filter"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 220
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Download",
+      "id": 13,
+      "description": "Whether the Download buttons will produce anything for the Download host box and the dashboard's time range, checked by pcap-dump against the files on disk -- including compiling the BPF expression, so a typo shows up here rather than as an empty file. ENTER A HOST: the box is empty. READY: how many files and bytes tcpdump will read. NOTHING IN RANGE: no capture file covers this time range (or every one was captured under a filter that excludes the host) -- widen the time range. REFUSED: a malformed host or BPF expression, or pcap_dump.download_enabled = false.",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 30
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://tzsp-decap:8051/check?host=${dl_host:percentencode}&bpf=${dl_bpf:percentencode}&proto=${dl_proto}&port=${dl_port:percentencode}&from=${__from}&to=${__to}",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "state_code",
+              "text": "state_code",
+              "type": "number"
+            },
+            {
+              "selector": "message",
+              "text": "message",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "NO ANSWER"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "state_code"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Download"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "ENTER A HOST",
+                        "color": "#9ca3af",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "READY",
+                        "color": "#0ca30c",
+                        "index": 1
+                      },
+                      "2": {
+                        "text": "NOTHING IN RANGE",
+                        "color": "#fab219",
+                        "index": 2
+                      },
+                      "3": {
+                        "text": "REFUSED",
+                        "color": "#ec835a",
+                        "index": 3
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "message"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Detail"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9ca3af"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "state_code": 0,
+              "message": 1
+            },
+            "renameByName": {}
+          }
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "title": "Download a host's traffic",
+      "id": 14,
+      "gridPos": {
+        "h": 7,
+        "w": 16,
+        "x": 8,
+        "y": 30
+      },
+      "options": {
+        "mode": "markdown",
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "### <a href=\"/api/datasources/proxy/uid/pcap-extract/extract?host=${dl_host:percentencode}&bpf=${dl_bpf:percentencode}&proto=${dl_proto}&port=${dl_port:percentencode}&from=${__from}&to=${__to}&format=pcap\" target=\"_blank\" rel=\"noopener\">⬇ pcap</a> &nbsp;&nbsp; <a href=\"/api/datasources/proxy/uid/pcap-extract/extract?host=${dl_host:percentencode}&bpf=${dl_bpf:percentencode}&proto=${dl_proto}&port=${dl_port:percentencode}&from=${__from}&to=${__to}&format=text\" target=\"_blank\" rel=\"noopener\">⬇ text</a> &nbsp;&nbsp; <a href=\"/api/datasources/proxy/uid/pcap-extract/extract?host=${dl_host:percentencode}&bpf=${dl_bpf:percentencode}&proto=${dl_proto}&port=${dl_port:percentencode}&from=${__from}&to=${__to}&format=hex\" target=\"_blank\" rel=\"noopener\">⬇ text + hex</a>\n\nType an IP or CIDR into **Download host**, optionally narrow it with **Download protocol** (tcp, udp, icmp, gre, ospf) and **Download port** (`443` or `8000-8100`, either direction) -- e.g. host `192.168.0.1` + protocol `icmp` is all of that host's ICMP -- and, for anything else, a tcpdump expression in **Download BPF**, set the **time range** to the stretch you want, check the *Download* tile says READY, and click. tcpdump re-reads the recorded files below, keeps that host's frames (802.1Q-tagged too), trims them to the time range and streams one merged file. **pcap** opens in Wireshark; **text** is `tcpdump -nn -tttt -e` (UTC, MACs and VLAN tags); **text + hex** adds `-X`. Only what was captured can come out: if the capture was off, or filtered to another network, the file is empty for that stretch.\n\nThe download goes through Grafana, so it takes a login -- **any** login, viewer included -- and every one is in the audit table with the Grafana user's name. A wide range on a busy ring takes a while: tcpdump reads every file in it (see the table below). `pcap_dump.download_enabled = false` switches downloads off."
+      }
+    },
+    {
+      "type": "table",
+      "title": "Files the download reads",
+      "id": 15,
+      "description": "Every capture file whose span touches the dashboard's time range, newest first, and what the download does with it: READ whole, partly in range (TRIMMED to the range), or SKIPPED because its session was captured under a CIDR filter that cannot contain the host. Empty when the Download host box is.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 37
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://tzsp-decap:8051/plan?host=${dl_host:percentencode}&bpf=${dl_bpf:percentencode}&proto=${dl_proto}&port=${dl_port:percentencode}&from=${__from}&to=${__to}",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "file",
+              "text": "file",
+              "type": "string"
+            },
+            {
+              "selector": "use",
+              "text": "use",
+              "type": "string"
+            },
+            {
+              "selector": "bytes",
+              "text": "bytes",
+              "type": "number"
+            },
+            {
+              "selector": "first_packet",
+              "text": "first_packet",
+              "type": "string"
+            },
+            {
+              "selector": "last_write",
+              "text": "last_write",
+              "type": "string"
+            },
+            {
+              "selector": "filter",
+              "text": "filter",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "file": 0,
+              "use": 1,
+              "bytes": 2,
+              "first_packet": 3,
+              "last_write": 4,
+              "filter": 5
+            },
+            "renameByName": {
+              "file": "File",
+              "use": "Download",
+              "bytes": "Size",
+              "first_packet": "First packet (UTC)",
+              "last_write": "Last write (UTC)",
+              "filter": "Captured under"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "File"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 270
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Size"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Download"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 330
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "read": {
+                        "text": "READ",
+                        "color": "#0ca30c",
+                        "index": 0
+                      },
+                      "partly in range: trimmed": {
+                        "text": "TRIMMED TO RANGE",
+                        "color": "#3b82f6",
+                        "index": 1
+                      }
+                    }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^skipped.*",
+                      "result": {
+                        "text": "SKIPPED - FILTER EXCLUDES HOST",
+                        "color": "#9ca3af",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "Capture Changes (audit)",
+      "description": "Every time capture was switched, re-filtered, or paused and resumed by the disk ceiling, from pcap-dump's own audit write to InfluxDB. Grafana keeps no record of who clicked, so this is what answers 'since when have we been recording that network'. Downloads are here too, with what was extracted and the Grafana user who pulled it -- the one entry on this table that names a person.",
+      "id": 12,
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "InfluxDB_Flux"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "InfluxDB_Flux"
+          },
+          "query": "// `detail` carries the scope (and a note, if the call was made by hand with\n// &note=...); the action is a tag, so no pivot is needed.\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"pcap_dump_control\" and r._field == \"detail\")\n  |> keep(columns: [\"_time\", \"action\", \"_value\"])\n  |> group()\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 200)\n"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "_time": 0,
+              "action": 1,
+              "_value": 2
+            },
+            "renameByName": {
+              "_time": "Time",
+              "action": "Change",
+              "_value": "Detail"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 190
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Change"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 150
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "on": {
+                        "text": "CAPTURE ON",
+                        "color": "#0ca30c",
+                        "index": 0
+                      },
+                      "off": {
+                        "text": "CAPTURE OFF",
+                        "color": "#9ca3af",
+                        "index": 1
+                      },
+                      "filter": {
+                        "text": "FILTER",
+                        "color": "#3b82f6",
+                        "index": 2
+                      },
+                      "pause": {
+                        "text": "PAUSED - DISK",
+                        "color": "#ec835a",
+                        "index": 3
+                      },
+                      "resume": {
+                        "text": "RESUMED",
+                        "color": "#0ca30c",
+                        "index": 4
+                      },
+                      "download": {
+                        "text": "DOWNLOAD",
+                        "color": "#a855f7",
+                        "index": 5
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Time",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "id": 16,
+      "title": "Packet Capture on Other Sites",
+      "description": "This board drives THIS host's capture only, and cannot do otherwise: each site's pcap-dump is reachable only from that site's own Grafana (its control API is unpublished and sits in that host's capture namespace -- publishing it would publish a switch that records every cleartext credential, and a download of it). So another site's capture is a link to that site's Packet Capture board, with this board's time range.\n\nThe list is every REMOTE_SITE_<NAME> line of properties.yml; the link needs that site's Grafana URL in a REMOTE_GRAFANA_<NAME>=<url> line next to it (same NAME). Apply with `docker compose up -d grafana`. Opening it needs a login on that Grafana.",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 53
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://localhost:3000/public/tzsp/sites.json",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "site",
+              "text": "site",
+              "type": "string"
+            },
+            {
+              "selector": "packet_capture",
+              "text": "packet_capture",
+              "type": "string"
+            },
+            {
+              "selector": "grafana",
+              "text": "grafana",
+              "type": "string"
+            },
+            {
+              "selector": "note",
+              "text": "note",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "noValue": "No other sites: this Grafana has no REMOTE_SITE_* lines"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Packet Capture"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open Packet Capture on that site",
+                    "url": "${__value.raw}?${__url_time_range}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Grafana"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open that site's Grafana",
+                    "url": "${__value.raw}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Site"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 160
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "site": 0,
+              "packet_capture": 1,
+              "grafana": 2,
+              "note": 3
+            },
+            "renameByName": {
+              "site": "Site",
+              "packet_capture": "Packet Capture",
+              "grafana": "Grafana",
+              "note": "Note"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "links": [
+    {
+      "title": "Packet capture on other sites",
+      "type": "link",
+      "icon": "external link",
+      "url": "/d/packet-capture?viewPanel=panel-16",
+      "keepTime": true,
+      "tooltip": "This board drives this host's capture only; other sites' boards are linked here",
+      "targetBlank": false,
+      "asDropdown": false,
+      "includeVars": false,
+      "tags": []
+    }
+  ]
+}

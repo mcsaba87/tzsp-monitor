@@ -1,0 +1,683 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "uid": "subnet-hosts",
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Active Hosts",
+      "description": "Addresses in the subnet that sent or received at least one flow in the time range (the collector's network_flow).",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"math\"\nimport \"regexp\"\nimport \"strings\"\n\n// The Subnet box, exactly. A prefix regex on the octet boundary at or above\n// the prefix is what InfluxDB pushes down (see the cidr helper elsewhere);\n// it reads a superset. Then the exact test runs on the rows left after the\n// per-host aggregate -- one row per host, never per flow -- so /20 or /27\n// mean what they say here, unlike the cidr boxes that round down.\nraw = strings.trimSpace(v: \"${subnet}\")\ngiven = raw != \"\"\nspec = if given then raw else \"255.255.255.255/32\"\np = strings.split(v: spec, t: \"/\")\nbits = if length(arr: p) > 1 then int(v: p[1]) else 32\no = strings.split(v: p[0], t: \".\")\nprefixRe =\n    if bits <= 0 then \"^[0-9]+\\\\.\"\n    else if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n    else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n    else if bits < 32 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n    else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\ncidrRe = regexp.compile(v: prefixRe)\nipInt = (ip) => {\n    q = strings.split(v: ip, t: \".\")\n\n    return\n        if length(arr: q) == 4 then\n            int(v: q[0]) * 16777216 + int(v: q[1]) * 65536 + int(v: q[2]) * 256 + int(v: q[3])\n        else\n            -1\n}\nsize = int(v: math.pow(x: 2.0, y: float(v: 32 - bits)))\nnetBase = ipInt(ip: p[0]) - ipInt(ip: p[0]) % size\n// The network and broadcast addresses of a /30 or wider are not hosts (the\n// broadcast one otherwise shows up as a \"host\" receiving every broadcast).\nedges = bits <= 30\ninNet = (ip) => {\n    i = ipInt(ip: ip)\n\n    return given and i >= 0 and i - i % size == netBase\n        and not (edges and (i == netBase or i == netBase + size - 1))\n}\n\nsentinel = array.from(rows: [{_value: -1}])\n\ns = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\"])\n  |> sum()\n  |> rename(columns: {src_ip: \"ip\"})\nd = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.dst_ip =~ cidrRe)\n  |> group(columns: [\"dst_ip\"])\n  |> sum()\n  |> rename(columns: {dst_ip: \"ip\"})\nn = union(tables: [s, d])\n  |> group()\n  |> filter(fn: (r) => inNet(ip: r.ip))\n  |> distinct(column: \"ip\")\n  |> count()\n  |> keep(columns: [\"_value\"])\n\nif given then union(tables: [n, array.from(rows: [{_value: 0}])]) |> sum() else sentinel\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "ENTER A SUBNET",
+                  "color": "#9ca3af",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3b82f6",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 34
+        }
+      },
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "Hosts Seen in ARP",
+      "description": "Addresses in the subnet that some MAC answered ARP for in the time range (arp-watch). 0 where the mirror carries no ARP -- a mangle mirror, an  TAP -- which is not the same as no hosts.",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"math\"\nimport \"regexp\"\nimport \"strings\"\n\n// The Subnet box, exactly. A prefix regex on the octet boundary at or above\n// the prefix is what InfluxDB pushes down (see the cidr helper elsewhere);\n// it reads a superset. Then the exact test runs on the rows left after the\n// per-host aggregate -- one row per host, never per flow -- so /20 or /27\n// mean what they say here, unlike the cidr boxes that round down.\nraw = strings.trimSpace(v: \"${subnet}\")\ngiven = raw != \"\"\nspec = if given then raw else \"255.255.255.255/32\"\np = strings.split(v: spec, t: \"/\")\nbits = if length(arr: p) > 1 then int(v: p[1]) else 32\no = strings.split(v: p[0], t: \".\")\nprefixRe =\n    if bits <= 0 then \"^[0-9]+\\\\.\"\n    else if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n    else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n    else if bits < 32 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n    else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\ncidrRe = regexp.compile(v: prefixRe)\nipInt = (ip) => {\n    q = strings.split(v: ip, t: \".\")\n\n    return\n        if length(arr: q) == 4 then\n            int(v: q[0]) * 16777216 + int(v: q[1]) * 65536 + int(v: q[2]) * 256 + int(v: q[3])\n        else\n            -1\n}\nsize = int(v: math.pow(x: 2.0, y: float(v: 32 - bits)))\nnetBase = ipInt(ip: p[0]) - ipInt(ip: p[0]) % size\n// The network and broadcast addresses of a /30 or wider are not hosts (the\n// broadcast one otherwise shows up as a \"host\" receiving every broadcast).\nedges = bits <= 30\ninNet = (ip) => {\n    i = ipInt(ip: ip)\n\n    return given and i >= 0 and i - i % size == netBase\n        and not (edges and (i == netBase or i == netBase + size - 1))\n}\n\nsentinel = array.from(rows: [{_value: -1}])\n\nn = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"arp_binding\" and r._field == \"packets\")\n  |> filter(fn: (r) => r.ip =~ cidrRe)\n  |> group(columns: [\"ip\"])\n  |> last()\n  |> group()\n  |> filter(fn: (r) => inNet(ip: r.ip))\n  |> count()\n  |> keep(columns: [\"_value\"])\n\nif given then union(tables: [n, array.from(rows: [{_value: 0}])]) |> sum() else sentinel\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "ENTER A SUBNET",
+                  "color": "#9ca3af",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3b82f6",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 34
+        }
+      },
+      "id": 2
+    },
+    {
+      "type": "stat",
+      "title": "Traffic of These Hosts",
+      "description": "The sum of the table's Total column: every byte a host in the subnet sent or received. A flow between two hosts of the subnet counts for both of them.",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"math\"\nimport \"regexp\"\nimport \"strings\"\n\n// The Subnet box, exactly. A prefix regex on the octet boundary at or above\n// the prefix is what InfluxDB pushes down (see the cidr helper elsewhere);\n// it reads a superset. Then the exact test runs on the rows left after the\n// per-host aggregate -- one row per host, never per flow -- so /20 or /27\n// mean what they say here, unlike the cidr boxes that round down.\nraw = strings.trimSpace(v: \"${subnet}\")\ngiven = raw != \"\"\nspec = if given then raw else \"255.255.255.255/32\"\np = strings.split(v: spec, t: \"/\")\nbits = if length(arr: p) > 1 then int(v: p[1]) else 32\no = strings.split(v: p[0], t: \".\")\nprefixRe =\n    if bits <= 0 then \"^[0-9]+\\\\.\"\n    else if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n    else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n    else if bits < 32 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n    else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\ncidrRe = regexp.compile(v: prefixRe)\nipInt = (ip) => {\n    q = strings.split(v: ip, t: \".\")\n\n    return\n        if length(arr: q) == 4 then\n            int(v: q[0]) * 16777216 + int(v: q[1]) * 65536 + int(v: q[2]) * 256 + int(v: q[3])\n        else\n            -1\n}\nsize = int(v: math.pow(x: 2.0, y: float(v: 32 - bits)))\nnetBase = ipInt(ip: p[0]) - ipInt(ip: p[0]) % size\n// The network and broadcast addresses of a /30 or wider are not hosts (the\n// broadcast one otherwise shows up as a \"host\" receiving every broadcast).\nedges = bits <= 30\ninNet = (ip) => {\n    i = ipInt(ip: ip)\n\n    return given and i >= 0 and i - i % size == netBase\n        and not (edges and (i == netBase or i == netBase + size - 1))\n}\n\nsentinel = array.from(rows: [{_value: -1.0}])\n\ns = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\"])\n  |> sum()\n  |> toFloat()\n  |> rename(columns: {src_ip: \"ip\"})\nd = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.dst_ip =~ cidrRe)\n  |> group(columns: [\"dst_ip\"])\n  |> sum()\n  |> toFloat()\n  |> rename(columns: {dst_ip: \"ip\"})\n// A flow inside the subnet counts on both sides, i.e. twice: the tile is the\n// sum of the table's Total column, which is per host.\nn = union(tables: [s, d])\n  |> group()\n  |> filter(fn: (r) => inNet(ip: r.ip))\n  |> sum()\n  |> keep(columns: [\"_value\"])\n\nif given then union(tables: [n, array.from(rows: [{_value: 0.0}])]) |> sum() else sentinel\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "ENTER A SUBNET",
+                  "color": "#9ca3af",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3b82f6",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 34
+        }
+      },
+      "id": 3
+    },
+    {
+      "type": "text",
+      "id": 4,
+      "title": "",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Type a subnet in the **Subnet** box (`10.12.6.0/24`, `192.168.73.0/26`, or a bare IP). Any prefix length is exact here.\n\nClick an **IP** for its drill-down, a **MAC** for its ARP history. Hostnames are reverse DNS; vendors come from the IEEE registry."
+      }
+    },
+    {
+      "type": "table",
+      "id": 5,
+      "title": "Hosts in $subnet",
+      "description": "Every address in the subnet seen in the time range: in a flow record (either end), or answering ARP. Traffic is the collector's, and nfstream counts both directions of a flow together, so Sent = bytes of the flows the host opened, Received = bytes of the flows it answered, Total = both. MAC/Vendor are the newest ARP answer for the address (several MACs: all of them, newest first, and the vendor of the newest; the Ethernet Attacks board says whether that is a new lease or an impersonation). A host only seen in ARP has no traffic in range. At most the Hosts box's number of the busiest hosts are listed (and as many ARP-only ones). Hostname is reverse DNS from this instance's resolver, and blank for another site.",
+      "gridPos": {
+        "h": 24,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"math\"\nimport \"regexp\"\nimport \"strings\"\n\n// The Subnet box, exactly. A prefix regex on the octet boundary at or above\n// the prefix is what InfluxDB pushes down (see the cidr helper elsewhere);\n// it reads a superset. Then the exact test runs on the rows left after the\n// per-host aggregate -- one row per host, never per flow -- so /20 or /27\n// mean what they say here, unlike the cidr boxes that round down.\nraw = strings.trimSpace(v: \"${subnet}\")\ngiven = raw != \"\"\nspec = if given then raw else \"255.255.255.255/32\"\np = strings.split(v: spec, t: \"/\")\nbits = if length(arr: p) > 1 then int(v: p[1]) else 32\no = strings.split(v: p[0], t: \".\")\nprefixRe =\n    if bits <= 0 then \"^[0-9]+\\\\.\"\n    else if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n    else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n    else if bits < 32 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n    else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\ncidrRe = regexp.compile(v: prefixRe)\nipInt = (ip) => {\n    q = strings.split(v: ip, t: \".\")\n\n    return\n        if length(arr: q) == 4 then\n            int(v: q[0]) * 16777216 + int(v: q[1]) * 65536 + int(v: q[2]) * 256 + int(v: q[3])\n        else\n            -1\n}\nsize = int(v: math.pow(x: 2.0, y: float(v: 32 - bits)))\nnetBase = ipInt(ip: p[0]) - ipInt(ip: p[0]) % size\n// The network and broadcast addresses of a /30 or wider are not hosts (the\n// broadcast one otherwise shows up as a \"host\" receiving every broadcast).\nedges = bits <= 30\ninNet = (ip) => {\n    i = ipInt(ip: ip)\n\n    return given and i >= 0 and i - i % size == netBase\n        and not (edges and (i == netBase or i == netBase + size - 1))\n}\n\n// Six pushed-down aggregates, each one row per host: bytes, flows and the\n// last flow, for the host as initiator (src) and as responder (dst).\nsentB = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\"])\n  |> sum()\n  |> toFloat()\n  |> rename(columns: {src_ip: \"ip\"})\n  |> set(key: \"_field\", value: \"sent\")\n  |> keep(columns: [\"ip\", \"_field\", \"_value\"])\nrecvB = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.dst_ip =~ cidrRe)\n  |> group(columns: [\"dst_ip\"])\n  |> sum()\n  |> toFloat()\n  |> rename(columns: {dst_ip: \"ip\"})\n  |> set(key: \"_field\", value: \"received\")\n  |> keep(columns: [\"ip\", \"_field\", \"_value\"])\nflowsS = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\"])\n  |> count()\n  |> toFloat()\n  |> rename(columns: {src_ip: \"ip\"})\n  |> set(key: \"_field\", value: \"flows\")\n  |> keep(columns: [\"ip\", \"_field\", \"_value\"])\nflowsR = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.dst_ip =~ cidrRe)\n  |> group(columns: [\"dst_ip\"])\n  |> count()\n  |> toFloat()\n  |> rename(columns: {dst_ip: \"ip\"})\n  |> set(key: \"_field\", value: \"flows\")\n  |> keep(columns: [\"ip\", \"_field\", \"_value\"])\nlastS = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\"])\n  |> last()\n  |> map(fn: (r) => ({r with _value: float(v: int(v: r._time) / 1000000)}))\n  |> toFloat()\n  |> rename(columns: {src_ip: \"ip\"})\n  |> set(key: \"_field\", value: \"last\")\n  |> keep(columns: [\"ip\", \"_field\", \"_value\"])\nlastR = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.dst_ip =~ cidrRe)\n  |> group(columns: [\"dst_ip\"])\n  |> last()\n  |> map(fn: (r) => ({r with _value: float(v: int(v: r._time) / 1000000)}))\n  |> toFloat()\n  |> rename(columns: {dst_ip: \"ip\"})\n  |> set(key: \"_field\", value: \"last\")\n  |> keep(columns: [\"ip\", \"_field\", \"_value\"])\n\nsums = union(tables: [sentB, recvB, flowsS, flowsR])\n  |> group(columns: [\"ip\", \"_field\"])\n  |> sum()\nlasts = union(tables: [lastS, lastR])\n  |> group(columns: [\"ip\", \"_field\"])\n  |> max()\n\nunion(tables: [sums, lasts])\n  |> group()\n  |> filter(fn: (r) => inNet(ip: r.ip))\n  |> pivot(rowKey: [\"ip\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({r with\n      sent: if exists r.sent then r.sent else 0.0,\n      received: if exists r.received then r.received else 0.0}))\n  |> map(fn: (r) => ({r with total: r.sent + r.received}))\n  |> sort(columns: [\"total\"], desc: true)\n  |> limit(n: ${max_hosts})\n  |> keep(columns: [\"ip\", \"sent\", \"received\", \"total\", \"flows\", \"last\"])\n"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"math\"\nimport \"regexp\"\nimport \"strings\"\n\n// The Subnet box, exactly. A prefix regex on the octet boundary at or above\n// the prefix is what InfluxDB pushes down (see the cidr helper elsewhere);\n// it reads a superset. Then the exact test runs on the rows left after the\n// per-host aggregate -- one row per host, never per flow -- so /20 or /27\n// mean what they say here, unlike the cidr boxes that round down.\nraw = strings.trimSpace(v: \"${subnet}\")\ngiven = raw != \"\"\nspec = if given then raw else \"255.255.255.255/32\"\np = strings.split(v: spec, t: \"/\")\nbits = if length(arr: p) > 1 then int(v: p[1]) else 32\no = strings.split(v: p[0], t: \".\")\nprefixRe =\n    if bits <= 0 then \"^[0-9]+\\\\.\"\n    else if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n    else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n    else if bits < 32 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n    else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\ncidrRe = regexp.compile(v: prefixRe)\nipInt = (ip) => {\n    q = strings.split(v: ip, t: \".\")\n\n    return\n        if length(arr: q) == 4 then\n            int(v: q[0]) * 16777216 + int(v: q[1]) * 65536 + int(v: q[2]) * 256 + int(v: q[3])\n        else\n            -1\n}\nsize = int(v: math.pow(x: 2.0, y: float(v: 32 - bits)))\nnetBase = ipInt(ip: p[0]) - ipInt(ip: p[0]) % size\n// The network and broadcast addresses of a /30 or wider are not hosts (the\n// broadcast one otherwise shows up as a \"host\" receiving every broadcast).\nedges = bits <= 30\ninNet = (ip) => {\n    i = ipInt(ip: ip)\n\n    return given and i >= 0 and i - i % size == netBase\n        and not (edges and (i == netBase or i == netBase + size - 1))\n}\n\n// Who answered ARP for each address, newest first. Empty where the mirror\n// carries no ARP (a mangle mirror, an  TAP) -- the IP rows stay.\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"arp_binding\" and r._field == \"packets\")\n  |> filter(fn: (r) => r.ip =~ cidrRe)\n  |> group(columns: [\"ip\", \"mac\", \"vendor\"])\n  |> last()\n  |> group()\n  |> filter(fn: (r) => inNet(ip: r.ip))\n  |> map(fn: (r) => ({r with vendor: if exists r.vendor then r.vendor else \"\"}))\n  |> group(columns: [\"ip\"])\n  |> sort(columns: [\"_time\"], desc: true)\n  |> reduce(\n      identity: {mac: \"\", vendor: \"\", macs: 0},\n      fn: (r, accumulator) => ({\n          mac: if accumulator.macs == 0 then r.mac else accumulator.mac + \", \" + r.mac,\n          vendor: if accumulator.macs == 0 then r.vendor else accumulator.vendor,\n          macs: accumulator.macs + 1}))\n  |> group()\n  |> limit(n: ${max_hosts})\n  |> keep(columns: [\"ip\", \"mac\", \"vendor\", \"macs\"])\n"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://dns-resolver:8000/resolve?ips=${subnet_hosts:csv}&site=${site}",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "ip",
+              "text": "ip",
+              "type": "string"
+            },
+            {
+              "selector": "host",
+              "text": "host",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "IP"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Host drill-down for ${__value.raw}",
+                    "url": "/d/host-drilldown?var-ip=${__value.raw}&${site:queryparam}&${__url_time_range}"
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 140
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MAC"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "ARP history of ${__value.raw}",
+                    "url": "/d/ethernet-attacks?var-mac=${__value.raw}&${site:queryparam}&${__url_time_range}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^(Sent|Received|Total)$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Total"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "continuous-BlPu"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 220
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Flows"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MACs"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.width",
+                "value": 70
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "transparent",
+                      "value": null
+                    },
+                    {
+                      "color": "#fab219",
+                      "value": 2
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last flow"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
+              },
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Total",
+            "desc": true
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "ip",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^([a-z_]+) [A-Z]$",
+            "renamePattern": "$1"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "ip": 0,
+              "host": 1,
+              "mac": 2,
+              "vendor": 3,
+              "macs": 4,
+              "sent": 5,
+              "received": 6,
+              "total": 7,
+              "flows": 8,
+              "last": 9
+            },
+            "renameByName": {
+              "ip": "IP",
+              "host": "Hostname",
+              "mac": "MAC",
+              "vendor": "Vendor",
+              "macs": "MACs",
+              "sent": "Sent",
+              "received": "Received",
+              "total": "Total",
+              "flows": "Flows",
+              "last": "Last flow"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Total",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 39,
+  "tags": [
+    "traffic",
+    "hosts",
+    "tzsp-monitor"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "site",
+        "type": "datasource",
+        "label": "Site",
+        "description": "Which tzsp-monitor instance these panels read. Hostnames are this instance's reverse DNS and are left blank for another site, whose private addresses mean different machines.",
+        "query": "influxdb",
+        "regex": "",
+        "current": {
+          "selected": false,
+          "text": "InfluxDB_Flux",
+          "value": "InfluxDB_Flux"
+        },
+        "options": [],
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1,
+        "skipUrlSync": false
+      },
+      {
+        "name": "subnet",
+        "type": "textbox",
+        "label": "Subnet",
+        "description": "The subnet to list, e.g. 10.12.6.0/24, 192.168.73.0/26, or a bare IP. Any prefix length is exact. Empty shows nothing.",
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "max_hosts",
+        "type": "custom",
+        "label": "Hosts",
+        "description": "At most this many hosts are listed (the busiest first), and as many ARP-only ones. Each is a reverse-DNS lookup the first time it is shown.",
+        "query": "100,250,500,1000",
+        "current": {
+          "selected": false,
+          "text": "250",
+          "value": "250"
+        },
+        "options": [
+          {
+            "selected": false,
+            "text": "100",
+            "value": "100"
+          },
+          {
+            "selected": true,
+            "text": "250",
+            "value": "250"
+          },
+          {
+            "selected": false,
+            "text": "500",
+            "value": "500"
+          },
+          {
+            "selected": false,
+            "text": "1000",
+            "value": "1000"
+          }
+        ],
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "skipUrlSync": false
+      },
+      {
+        "name": "subnet_hosts",
+        "type": "query",
+        "label": "Subnet hosts (internal)",
+        "description": "Hidden helper: the addresses the table lists, fed to the reverse-DNS resolver.",
+        "hide": 2,
+        "datasource": {
+          "type": "influxdb",
+          "uid": "${site}"
+        },
+        "query": "import \"array\"\nimport \"math\"\nimport \"regexp\"\nimport \"strings\"\n\n// The Subnet box, exactly. A prefix regex on the octet boundary at or above\n// the prefix is what InfluxDB pushes down (see the cidr helper elsewhere);\n// it reads a superset. Then the exact test runs on the rows left after the\n// per-host aggregate -- one row per host, never per flow -- so /20 or /27\n// mean what they say here, unlike the cidr boxes that round down.\nraw = strings.trimSpace(v: \"${subnet}\")\ngiven = raw != \"\"\nspec = if given then raw else \"255.255.255.255/32\"\np = strings.split(v: spec, t: \"/\")\nbits = if length(arr: p) > 1 then int(v: p[1]) else 32\no = strings.split(v: p[0], t: \".\")\nprefixRe =\n    if bits <= 0 then \"^[0-9]+\\\\.\"\n    else if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n    else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n    else if bits < 32 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n    else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\ncidrRe = regexp.compile(v: prefixRe)\nipInt = (ip) => {\n    q = strings.split(v: ip, t: \".\")\n\n    return\n        if length(arr: q) == 4 then\n            int(v: q[0]) * 16777216 + int(v: q[1]) * 65536 + int(v: q[2]) * 256 + int(v: q[3])\n        else\n            -1\n}\nsize = int(v: math.pow(x: 2.0, y: float(v: 32 - bits)))\nnetBase = ipInt(ip: p[0]) - ipInt(ip: p[0]) % size\n// The network and broadcast addresses of a /30 or wider are not hosts (the\n// broadcast one otherwise shows up as a \"host\" receiving every broadcast).\nedges = bits <= 30\ninNet = (ip) => {\n    i = ipInt(ip: ip)\n\n    return given and i >= 0 and i - i % size == netBase\n        and not (edges and (i == netBase or i == netBase + size - 1))\n}\n\ns = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\"])\n  |> sum()\n  |> rename(columns: {src_ip: \"ip\"})\nd = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.dst_ip =~ cidrRe)\n  |> group(columns: [\"dst_ip\"])\n  |> sum()\n  |> rename(columns: {dst_ip: \"ip\"})\ntraffic = union(tables: [s, d])\n  |> group(columns: [\"ip\"])\n  |> sum()\n  |> group()\n  |> filter(fn: (r) => inNet(ip: r.ip))\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: ${max_hosts})\n  |> keep(columns: [\"ip\"])\narp = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"arp_binding\" and r._field == \"packets\")\n  |> filter(fn: (r) => r.ip =~ cidrRe)\n  |> group(columns: [\"ip\"])\n  |> last()\n  |> group()\n  |> filter(fn: (r) => inNet(ip: r.ip))\n  |> limit(n: ${max_hosts})\n  |> keep(columns: [\"ip\"])\n\nunion(tables: [traffic, arp])\n  |> group()\n  |> distinct(column: \"ip\")\n",
+        "definition": "import \"array\"\nimport \"math\"\nimport \"regexp\"\nimport \"strings\"\n\n// The Subnet box, exactly. A prefix regex on the octet boundary at or above\n// the prefix is what InfluxDB pushes down (see the cidr helper elsewhere);\n// it reads a superset. Then the exact test runs on the rows left after the\n// per-host aggregate -- one row per host, never per flow -- so /20 or /27\n// mean what they say here, unlike the cidr boxes that round down.\nraw = strings.trimSpace(v: \"${subnet}\")\ngiven = raw != \"\"\nspec = if given then raw else \"255.255.255.255/32\"\np = strings.split(v: spec, t: \"/\")\nbits = if length(arr: p) > 1 then int(v: p[1]) else 32\no = strings.split(v: p[0], t: \".\")\nprefixRe =\n    if bits <= 0 then \"^[0-9]+\\\\.\"\n    else if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n    else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n    else if bits < 32 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n    else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\ncidrRe = regexp.compile(v: prefixRe)\nipInt = (ip) => {\n    q = strings.split(v: ip, t: \".\")\n\n    return\n        if length(arr: q) == 4 then\n            int(v: q[0]) * 16777216 + int(v: q[1]) * 65536 + int(v: q[2]) * 256 + int(v: q[3])\n        else\n            -1\n}\nsize = int(v: math.pow(x: 2.0, y: float(v: 32 - bits)))\nnetBase = ipInt(ip: p[0]) - ipInt(ip: p[0]) % size\n// The network and broadcast addresses of a /30 or wider are not hosts (the\n// broadcast one otherwise shows up as a \"host\" receiving every broadcast).\nedges = bits <= 30\ninNet = (ip) => {\n    i = ipInt(ip: ip)\n\n    return given and i >= 0 and i - i % size == netBase\n        and not (edges and (i == netBase or i == netBase + size - 1))\n}\n\ns = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\"])\n  |> sum()\n  |> rename(columns: {src_ip: \"ip\"})\nd = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.dst_ip =~ cidrRe)\n  |> group(columns: [\"dst_ip\"])\n  |> sum()\n  |> rename(columns: {dst_ip: \"ip\"})\ntraffic = union(tables: [s, d])\n  |> group(columns: [\"ip\"])\n  |> sum()\n  |> group()\n  |> filter(fn: (r) => inNet(ip: r.ip))\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: ${max_hosts})\n  |> keep(columns: [\"ip\"])\narp = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"arp_binding\" and r._field == \"packets\")\n  |> filter(fn: (r) => r.ip =~ cidrRe)\n  |> group(columns: [\"ip\"])\n  |> last()\n  |> group()\n  |> filter(fn: (r) => inNet(ip: r.ip))\n  |> limit(n: ${max_hosts})\n  |> keep(columns: [\"ip\"])\n\nunion(tables: [traffic, arp])\n  |> group()\n  |> distinct(column: \"ip\")\n",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": null,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "regex": "",
+        "sort": 0,
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Subnet Hosts",
+  "description": "Every host in one subnet: its traffic, reverse-DNS name, and the MAC and NIC vendor that answer ARP for it.",
+  "version": 1,
+  "weekStart": ""
+}

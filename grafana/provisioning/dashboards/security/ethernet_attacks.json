@@ -1,0 +1,2132 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "uid": "ethernet-attacks",
+  "links": [],
+  "liveNow": false,
+  "refresh": "1m",
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": [
+    "network",
+    "tzsp",
+    "arp",
+    "ethernet",
+    "security"
+  ],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Ethernet Attacks: ARP Spoofing & Poisoning",
+  "version": 1,
+  "description": "arp-watch: every IP -> MAC binding on the mirror with its vendor, and the classic layer-2 attacks on it.",
+  "templating": {
+    "list": [
+      {
+        "name": "site",
+        "type": "datasource",
+        "label": "Site",
+        "description": "Which tzsp-monitor instance these panels read. Remote sites are the REMOTE_SITE_* lines in properties.yml of the instance serving this Grafana; each is a datasource pointed at that site's own InfluxDB, so nothing is copied between sites. Controls never follow this box: rule suppression and reverse DNS only ever act on the local site, and are inert while another site is selected.",
+        "query": "influxdb",
+        "regex": "",
+        "current": {
+          "selected": false,
+          "text": "InfluxDB_Flux",
+          "value": "InfluxDB_Flux"
+        },
+        "options": [],
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1,
+        "skipUrlSync": false
+      },
+      {
+        "name": "cidr",
+        "type": "textbox",
+        "label": "CIDR filter",
+        "description": "Restrict the board to addresses in this range, e.g. 10.12.0.0/16 or a bare IP. Empty = no filter. Prefix lengths other than /8, /16, /24 and /32 round down to the enclosing octet boundary. Applies to the IP an alert or binding is about; the pipeline tiles ignore it.",
+        "hide": 0,
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "skipUrlSync": false
+      },
+      {
+        "name": "mac",
+        "type": "textbox",
+        "label": "MAC (prefix)",
+        "description": "Restrict the binding tables and Recent Alerts to one MAC -- or a prefix, so 48:a9:8a is every device of that vendor block. Lower or upper case, colon-separated. Filled by clicking a MAC.",
+        "hide": 0,
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "skipUrlSync": false
+      },
+      {
+        "name": "severity",
+        "type": "custom",
+        "label": "Severity",
+        "description": "Severity on the Suricata scale, 1 being the most severe: 1 gateway_spoof, 2 arp_poisoning, 3 conflicts/floods/sweeps/mismatches and a takeover, 4 a plain MAC change or a new station. Click a bar in Alerts over Time, a Severity cell, or the Critical & High tile to set it; Alerts in Range puts it back to All.",
+        "hide": 0,
+        "query": "1 - critical : 1,2 - high : 2,3 - medium : 3,4 - informational : 4",
+        "multi": true,
+        "includeAll": true,
+        "allValue": null,
+        "options": [
+          {
+            "selected": true,
+            "text": "All",
+            "value": "$__all"
+          },
+          {
+            "selected": false,
+            "text": "1 - critical",
+            "value": "1"
+          },
+          {
+            "selected": false,
+            "text": "2 - high",
+            "value": "2"
+          },
+          {
+            "selected": false,
+            "text": "3 - medium",
+            "value": "3"
+          },
+          {
+            "selected": false,
+            "text": "4 - informational",
+            "value": "4"
+          }
+        ],
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "ARP Watch",
+      "description": "What arp-watch itself says about its input, computed in the service: NO TAP (tzsp0 missing), NO MIRROR (nothing received on the tap for arp_watch.silent_seconds), NO ARP (traffic arrives but carries no ARP -- a mangle/IP-only mirror, a filtered sniffer, or an  TAP, whose fabric answers ARP itself), LEARNING (the first hour after the first-ever start: new-station and MAC-change alerts are held back; spoofing and conflicts are not), WATCHING. NOT RUNNING means no health point in 15 minutes. If this is not WATCHING or LEARNING, an empty board below means nothing.",
+      "id": 1,
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\nseen = from(bucket: \"network_traffic\")\n  |> range(start: -15m)\n  |> filter(fn: (r) => r._measurement == \"arp_watch\" and r._field == \"state_code\")\n  |> last()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, array.from(rows: [{_value: -1}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "NOT RUNNING",
+                  "color": "#d03b3b",
+                  "index": 0
+                },
+                "0": {
+                  "text": "NO TAP",
+                  "color": "#d03b3b",
+                  "index": 1
+                },
+                "1": {
+                  "text": "NO MIRROR",
+                  "color": "#d03b3b",
+                  "index": 2
+                },
+                "2": {
+                  "text": "NO ARP",
+                  "color": "#ec835a",
+                  "index": 3
+                },
+                "3": {
+                  "text": "LEARNING",
+                  "color": "#3b82f6",
+                  "index": 4
+                },
+                "4": {
+                  "text": "WATCHING",
+                  "color": "#0ca30c",
+                  "index": 5
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 40
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Gateway Spoofing",
+      "description": "gateway_spoof alerts in range: a protected address (every router in mikrotik.host / mikrotik.<name>.host, plus arp_watch.protected) claimed by a MAC that is not its own. This is the man-in-the-middle that matters -- every host on the segment sends its traffic to whoever owns the gateway's address. One forged packet is enough to raise it. Click to see only critical alerts.",
+      "id": 2,
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\nseen = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"arp_alert\" and r._field == \"count\")\n  |> filter(fn: (r) => r.alert == \"gateway_spoof\")\n  |> group()\n  |> sum()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "NONE",
+                  "color": "#0ca30c",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#d03b3b",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 40
+        }
+      },
+      "links": [
+        {
+          "title": "Only critical",
+          "url": "/d/ethernet-attacks?${__url_time_range}&${site:queryparam}&${cidr:queryparam}&${mac:queryparam}&var-severity=1",
+          "targetBlank": false
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Critical & High",
+      "description": "Alerts of severity 1 (gateway spoofing) and 2 (ARP poisoning: one IP claimed alternately by two MACs, one of which is known as another host) in range. Click to drill down to those two.",
+      "id": 3,
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n// The MAC box is a prefix, so a whole vendor block (48:a9:8a) works too.\nmacRe = if \"${mac}\" == \"\" then /.*/\n    else regexp.compile(v: \"^\" + regexp.quoteMeta(v: strings.toLower(v: strings.trimSpace(v: \"${mac}\"))))\n\nseen = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"arp_alert\" and r._field == \"count\")\n  |> filter(fn: (r) => r.severity == \"1\" or r.severity == \"2\")\n  |> filter(fn: (r) => r.ip =~ cidrRe)\n  |> group()\n  |> sum()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "NONE",
+                  "color": "#0ca30c",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#ec835a",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 40
+        }
+      },
+      "links": [
+        {
+          "title": "Drill down: critical and high only",
+          "url": "/d/ethernet-attacks?${__url_time_range}&${site:queryparam}&${cidr:queryparam}&${mac:queryparam}&var-severity=1&var-severity=2",
+          "targetBlank": false
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Alerts in Range",
+      "description": "Every ARP alert in range, at any severity (and within the CIDR box). Click to clear the Severity filter.",
+      "id": 4,
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n// The MAC box is a prefix, so a whole vendor block (48:a9:8a) works too.\nmacRe = if \"${mac}\" == \"\" then /.*/\n    else regexp.compile(v: \"^\" + regexp.quoteMeta(v: strings.toLower(v: strings.trimSpace(v: \"${mac}\"))))\n\nseen = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"arp_alert\" and r._field == \"count\")\n  |> filter(fn: (r) => r.ip =~ cidrRe)\n  |> group()\n  |> sum()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "NONE",
+                  "color": "#0ca30c",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3b82f6",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 40
+        }
+      },
+      "links": [
+        {
+          "title": "All severities",
+          "url": "/d/ethernet-attacks?${__url_time_range}&${site:queryparam}&${cidr:queryparam}&${mac:queryparam}&var-severity=$__all",
+          "targetBlank": false
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Contested IPs",
+      "description": "Addresses claimed by more than one MAC within the time range (and the CIDR / MAC boxes). Not every one is an attack -- a DHCP lease handed to a new machine moves an address once -- but this is where poisoning shows up first. Listed in IPs Claimed by More Than One MAC below. -1 (NO DATA) means no bindings were recorded at all.",
+      "id": 5,
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n// The MAC box is a prefix, so a whole vendor block (48:a9:8a) works too.\nmacRe = if \"${mac}\" == \"\" then /.*/\n    else regexp.compile(v: \"^\" + regexp.quoteMeta(v: strings.toLower(v: strings.trimSpace(v: \"${mac}\"))))\n\nbindings = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"arp_binding\")\n  |> filter(fn: (r) => r.ip =~ cidrRe)\n  |> filter(fn: (r) => r.mac =~ macRe)\n\nseen = bindings\n  |> filter(fn: (r) => r._field == \"packets\")\n  |> last()\n  |> group(columns: [\"ip\", \"vlan\"])\n  |> count()\n  |> filter(fn: (r) => r._value > 1)\n  |> group()\n  |> count()\n  |> keep(columns: [\"_value\"])\n\nany = bindings\n  |> filter(fn: (r) => r._field == \"packets\")\n  |> last()\n  |> group()\n  |> count()\n  // 0 whenever any binding exists (count() emits no row for an empty input).\n  // Not an if/else: measured on 2.7, a numeric conditional in this map\n  // returns an empty table instead of the row.\n  |> map(fn: (r) => ({r with _value: r._value * 0}))\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, any, array.from(rows: [{_value: -1}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "NO DATA",
+                  "color": "#9ca3af",
+                  "index": 0
+                },
+                "0": {
+                  "text": "NONE",
+                  "color": "#0ca30c",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#fab219",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 40
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Stations Seen",
+      "description": "Distinct IP -> MAC bindings heard in range (within the CIDR / MAC boxes). A binding is an ARP packet whose sender says \"this IP is at this MAC\"; probes (sender 0.0.0.0) bind nothing.",
+      "id": 6,
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n// The MAC box is a prefix, so a whole vendor block (48:a9:8a) works too.\nmacRe = if \"${mac}\" == \"\" then /.*/\n    else regexp.compile(v: \"^\" + regexp.quoteMeta(v: strings.toLower(v: strings.trimSpace(v: \"${mac}\"))))\n\nbindings = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"arp_binding\")\n  |> filter(fn: (r) => r.ip =~ cidrRe)\n  |> filter(fn: (r) => r.mac =~ macRe)\n\nseen = bindings\n  |> filter(fn: (r) => r._field == \"packets\")\n  |> last()\n  |> group()\n  |> count()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3b82f6",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 40
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 7,
+      "title": "ARP Alerts over Time by Severity (click a bar to drill down)",
+      "description": "Stacked count of ARP alerts per bucket. Click a bar and pick \"Only this severity\" to narrow every alert panel below. The bucket is ~1/96 of the range, floored at the service's 60s window, and labelled with the START of its window, so zooming onto a bar selects the alerts that drew it. Colours are pinned per severity.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n// The MAC box is a prefix, so a whole vendor block (48:a9:8a) works too.\nmacRe = if \"${mac}\" == \"\" then /.*/\n    else regexp.compile(v: \"^\" + regexp.quoteMeta(v: strings.toLower(v: strings.trimSpace(v: \"${mac}\"))))\n\n// ~96 buckets whatever the range, floored at the service's 60s window, below\n// which there is nothing finer to show; labelled with the window START, so\n// zooming onto a bar selects the minutes that drew it.\nspanNs = int(v: v.timeRangeStop) - int(v: v.timeRangeStart)\neveryNs = if spanNs / 96 < 60000000000 then 60000000000 else spanNs / 96\nevery = duration(v: everyNs)\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"arp_alert\" and r._field == \"count\")\n  |> filter(fn: (r) => r.severity =~ /^${severity:regex}$/)\n  |> filter(fn: (r) => r.ip =~ cidrRe)\n  |> aggregateWindow(every: every, fn: sum, timeSrc: \"_start\", createEmpty: false)\n  |> group(columns: [\"severity\", \"severity_name\"])\n  |> aggregateWindow(every: every, fn: sum, timeSrc: \"_start\", createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"severity\", \"severity_name\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "gradientMode": "none",
+            "barAlignment": 1,
+            "showPoints": "never",
+            "axisSoftMin": 0
+          },
+          "links": [
+            {
+              "title": "Only this severity",
+              "url": "/d/ethernet-attacks?${__url_time_range}&${site:queryparam}&${cidr:queryparam}&${mac:queryparam}&var-severity=${__field.labels.severity}",
+              "targetBlank": false
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*critical.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d03b3b"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "1 - critical"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*high.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#ec835a"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "2 - high"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*medium.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#e3c93c"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "3 - medium"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*info.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3b82f6"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "4 - informational"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 8,
+      "title": "ARP on the Mirror (packets per bucket)",
+      "description": "What arp-watch read, by kind. Requests and replies are the normal conversation; gratuitous ARP is a host announcing itself (at boot, after a failover) -- a steady stream of it is a flood; unsolicited replies are answers nobody asked for, which is how arpspoof and its relatives work (one every 2 seconds per victim); probes are RFC 5227 duplicate-address checks. Ignores the CIDR box: it describes the capture. Capture drops are frames the kernel had to discard before this service read them -- if that line is not flat at zero, alerts were missed.",
+      "gridPos": {
+        "h": 8,
+        "w": 14,
+        "x": 0,
+        "y": 13
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "\n// ~96 buckets whatever the range, floored at the service's 60s window, below\n// which there is nothing finer to show; labelled with the window START, so\n// zooming onto a bar selects the minutes that drew it.\nspanNs = int(v: v.timeRangeStop) - int(v: v.timeRangeStart)\neveryNs = if spanNs / 96 < 60000000000 then 60000000000 else spanNs / 96\nevery = duration(v: everyNs)\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"arp_watch\")\n  |> filter(fn: (r) => r._field == \"requests\" or r._field == \"replies\" or r._field == \"gratuitous\"\n      or r._field == \"unsolicited\" or r._field == \"probes\" or r._field == \"capture_drops\")\n  |> aggregateWindow(every: every, fn: sum, timeSrc: \"_start\", createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "barAlignment": 1,
+            "axisSoftMin": 0,
+            "spanNulls": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "requests"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "requests"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3b82f6"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "replies"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "replies"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#0ca30c"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "gratuitous"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "gratuitous"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#a855f7"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "probes"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "probes"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9ca3af"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "unsolicited"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "unsolicited replies"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#ec835a"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "capture_drops"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "capture drops"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d03b3b"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "barchart",
+      "id": 9,
+      "title": "Alerts by Type",
+      "description": "How many of each alert in range (Severity and CIDR boxes apply). One bar colour: the bars encode one magnitude. gateway_spoof (1) and arp_poisoning (2) are attacks; ip_conflict, the floods, sweeps and mismatches (3) need a look; mac_changed (4) and new_station (4) are the network changing.",
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 14,
+        "y": 13
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n// The MAC box is a prefix, so a whole vendor block (48:a9:8a) works too.\nmacRe = if \"${mac}\" == \"\" then /.*/\n    else regexp.compile(v: \"^\" + regexp.quoteMeta(v: strings.toLower(v: strings.trimSpace(v: \"${mac}\"))))\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"arp_alert\" and r._field == \"count\")\n  |> filter(fn: (r) => r.severity =~ /^${severity:regex}$/)\n  |> filter(fn: (r) => r.ip =~ cidrRe)\n  |> group(columns: [\"alert\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> keep(columns: [\"alert\", \"_value\"])\n  |> rename(columns: {_value: \"alerts\"})\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3b82f6"
+          },
+          "custom": {
+            "fillOpacity": 85
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xField": "alert",
+        "showValue": "auto",
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        },
+        "barWidth": 0.8,
+        "groupWidth": 0.7
+      }
+    },
+    {
+      "type": "table",
+      "id": 10,
+      "title": "IPs Claimed by More Than One MAC",
+      "description": "Every address that more than one MAC answered for in range, with the claimants and their vendors. Two MACs in a row here is not yet an attack -- one move is a new DHCP lease, which the service reports as mac_changed (info) -- but an attacker is always here: the poisoned address and the attacker's MAC side by side with the real one. A vendor that does not belong (a laptop's NIC next to your router's) is the quickest tell. Per VLAN: the same address in two VLANs is two hosts.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n// The MAC box is a prefix, so a whole vendor block (48:a9:8a) works too.\nmacRe = if \"${mac}\" == \"\" then /.*/\n    else regexp.compile(v: \"^\" + regexp.quoteMeta(v: strings.toLower(v: strings.trimSpace(v: \"${mac}\"))))\n\nbindings = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"arp_binding\")\n  |> filter(fn: (r) => r.ip =~ cidrRe)\n  |> filter(fn: (r) => r.mac =~ macRe)\n\nbindings\n  |> filter(fn: (r) => r._field == \"packets\")\n  |> sum()\n  |> group(columns: [\"ip\", \"vlan\"])\n  |> reduce(identity: {macs: 0, claimants: \"\", packets: 0},\n      fn: (r, accumulator) => ({\n          macs: accumulator.macs + 1,\n          claimants: accumulator.claimants + (if accumulator.claimants == \"\" then \"\" else \", \")\n              + r.mac + (if exists r.vendor then \" (\" + r.vendor + \")\" else \"\"),\n          packets: accumulator.packets + r._value}))\n  |> filter(fn: (r) => r.macs > 1)\n  |> group()\n  |> sort(columns: [\"macs\", \"packets\"], desc: true)\n  |> limit(n: 200)\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "IP"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 120
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Host drill-down for ${__value.raw}",
+                    "url": "/d/host-drilldown?${__url_time_range}&${site:queryparam}&var-ip=${__value.raw}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "VLAN"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 60
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MACs"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 60
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ARP packets"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "ip": 0,
+              "vlan": 1,
+              "macs": 2,
+              "claimants": 3,
+              "packets": 4
+            },
+            "renameByName": {
+              "ip": "IP",
+              "vlan": "VLAN",
+              "macs": "MACs",
+              "claimants": "Claimed by",
+              "packets": "ARP packets"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "MACs",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "id": 11,
+      "title": "MACs Answering for More Than One IP",
+      "description": "Every MAC that claimed more than one address in range. Routers doing proxy ARP, VRRP masters, hosts with secondary addresses and hypervisor bridges belong here legitimately -- list them in arp_watch.trusted_macs once confirmed. A workstation-class vendor with your gateway's address in its list is a poisoner. Click a MAC to narrow the whole board to it.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 21
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n// The MAC box is a prefix, so a whole vendor block (48:a9:8a) works too.\nmacRe = if \"${mac}\" == \"\" then /.*/\n    else regexp.compile(v: \"^\" + regexp.quoteMeta(v: strings.toLower(v: strings.trimSpace(v: \"${mac}\"))))\n\nbindings = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"arp_binding\")\n  |> filter(fn: (r) => r.ip =~ cidrRe)\n  |> filter(fn: (r) => r.mac =~ macRe)\n\nbindings\n  |> filter(fn: (r) => r._field == \"packets\")\n  |> sum()\n  |> map(fn: (r) => ({r with vendor: if exists r.vendor then r.vendor else \"\"}))\n  |> group(columns: [\"mac\", \"vendor\"])\n  |> sort(columns: [\"ip\"])\n  |> reduce(identity: {ips: 0, addresses: \"\", packets: 0},\n      fn: (r, accumulator) => ({\n          ips: accumulator.ips + 1,\n          addresses: accumulator.addresses + (if accumulator.addresses == \"\" then \"\" else \", \")\n              + r.ip + (if r.vlan != \"0\" then \" (vlan \" + r.vlan + \")\" else \"\"),\n          packets: accumulator.packets + r._value}))\n  |> filter(fn: (r) => r.ips > 1)\n  |> group()\n  |> sort(columns: [\"ips\", \"packets\"], desc: true)\n  |> limit(n: 200)\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MAC"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 140
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Only this MAC",
+                    "url": "/d/ethernet-attacks?${__url_time_range}&${site:queryparam}&${severity:queryparam}&var-cidr=&var-mac=${__value.raw}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Vendor"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 180
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "IPs"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 55
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ARP packets"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "mac": 0,
+              "vendor": 1,
+              "ips": 2,
+              "addresses": 3,
+              "packets": 4
+            },
+            "renameByName": {
+              "mac": "MAC",
+              "vendor": "Vendor",
+              "ips": "IPs",
+              "addresses": "Addresses",
+              "packets": "ARP packets"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "IPs",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "id": 12,
+      "title": "Recent ARP Alerts (click a severity to drill down)",
+      "description": "The last 100 matching alerts. MAC is the address the alert is about (the impostor, the flooder, the new station); Other MAC is the one it is measured against (the real owner, the previous holder, or for eth_mismatch the Ethernet source). Count is every event since the previous point for the same alert and address -- one point per arp_watch.alert_repeat_seconds, so a long attack is a few rows with large counts, not hundreds. Vendors are the IEEE registry's (\"(randomized)\" is a locally administered address: phones and VMs make those up).",
+      "gridPos": {
+        "h": 11,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n// The MAC box is a prefix, so a whole vendor block (48:a9:8a) works too.\nmacRe = if \"${mac}\" == \"\" then /.*/\n    else regexp.compile(v: \"^\" + regexp.quoteMeta(v: strings.toLower(v: strings.trimSpace(v: \"${mac}\"))))\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"arp_alert\")\n  |> filter(fn: (r) => r.severity =~ /^${severity:regex}$/)\n  |> filter(fn: (r) => r.ip =~ cidrRe)\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> group()\n  |> map(fn: (r) => ({r with\n      mac: if exists r.mac then r.mac else \"\",\n      other_mac: if exists r.other_mac then r.other_mac else \"\"}))\n  |> filter(fn: (r) => r.mac =~ macRe or r.other_mac =~ macRe)\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 100)\n  |> keep(columns: [\"_time\", \"severity\", \"alert\", \"ip\", \"vlan\", \"mac\", \"vendor\",\n                    \"other_mac\", \"other_vendor\", \"count\", \"detail\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 155
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Severity"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 120
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Only this severity",
+                    "url": "/d/ethernet-attacks?${__url_time_range}&${site:queryparam}&${cidr:queryparam}&${mac:queryparam}&var-severity=${__value.raw}",
+                    "targetBlank": false
+                  }
+                ]
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "1": {
+                        "text": "1 - critical",
+                        "color": "#d03b3b",
+                        "index": 0
+                      },
+                      "2": {
+                        "text": "2 - high",
+                        "color": "#ec835a",
+                        "index": 1
+                      },
+                      "3": {
+                        "text": "3 - medium",
+                        "color": "#e3c93c",
+                        "index": 2
+                      },
+                      "4": {
+                        "text": "4 - informational",
+                        "color": "#3b82f6",
+                        "index": 3
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Alert"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 170
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "gateway_spoof": {
+                        "text": "gateway spoofed",
+                        "color": "#d03b3b",
+                        "index": 0
+                      },
+                      "arp_poisoning": {
+                        "text": "ARP poisoning",
+                        "color": "#ec835a",
+                        "index": 1
+                      },
+                      "ip_conflict": {
+                        "text": "IP conflict",
+                        "color": "#e3c93c",
+                        "index": 2
+                      },
+                      "unsolicited_replies": {
+                        "text": "unsolicited replies",
+                        "color": "#e3c93c",
+                        "index": 3
+                      },
+                      "garp_flood": {
+                        "text": "gratuitous ARP flood",
+                        "color": "#e3c93c",
+                        "index": 4
+                      },
+                      "arp_scan": {
+                        "text": "ARP sweep",
+                        "color": "#e3c93c",
+                        "index": 5
+                      },
+                      "eth_mismatch": {
+                        "text": "sender != Ethernet source",
+                        "color": "#e3c93c",
+                        "index": 6
+                      },
+                      "bogus_arp": {
+                        "text": "bogus sender",
+                        "color": "#e3c93c",
+                        "index": 7
+                      },
+                      "mac_changed": {
+                        "text": "MAC changed",
+                        "color": "#3b82f6",
+                        "index": 8
+                      },
+                      "new_station": {
+                        "text": "new station",
+                        "color": "#3b82f6",
+                        "index": 9
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "IP"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 115
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Host drill-down for ${__value.raw}",
+                    "url": "/d/host-drilldown?${__url_time_range}&${site:queryparam}&var-ip=${__value.raw}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "VLAN"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 55
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MAC"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 140
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Only this MAC",
+                    "url": "/d/ethernet-attacks?${__url_time_range}&${site:queryparam}&${severity:queryparam}&var-cidr=&var-mac=${__value.raw}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Vendor"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Other MAC"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 140
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Only this MAC",
+                    "url": "/d/ethernet-attacks?${__url_time_range}&${site:queryparam}&${severity:queryparam}&var-cidr=&var-mac=${__value.raw}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Other vendor"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Count"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 65
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "_time": 0,
+              "severity": 1,
+              "alert": 2,
+              "ip": 3,
+              "vlan": 4,
+              "mac": 5,
+              "vendor": 6,
+              "other_mac": 7,
+              "other_vendor": 8,
+              "count": 9,
+              "detail": 10
+            },
+            "renameByName": {
+              "_time": "Time",
+              "severity": "Severity",
+              "alert": "Alert",
+              "ip": "IP",
+              "vlan": "VLAN",
+              "mac": "MAC",
+              "vendor": "Vendor",
+              "other_mac": "Other MAC",
+              "other_vendor": "Other vendor",
+              "count": "Count",
+              "detail": "Detail"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Time",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "id": 13,
+      "title": "Station Table: who answers for which IP",
+      "description": "Every IP -> MAC binding heard in range, with the vendor from the IEEE registry (blank while dns-resolver has not yet downloaded it). First heard is when the MAC was first seen by this service at all -- persistent across restarts -- so a recent date on an old address is a new machine. Click an IP for its traffic, a MAC to narrow the board to it. Capped at 1000 rows; use the CIDR or MAC box on a large network.",
+      "gridPos": {
+        "h": 12,
+        "w": 16,
+        "x": 0,
+        "y": 41
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n// The MAC box is a prefix, so a whole vendor block (48:a9:8a) works too.\nmacRe = if \"${mac}\" == \"\" then /.*/\n    else regexp.compile(v: \"^\" + regexp.quoteMeta(v: strings.toLower(v: strings.trimSpace(v: \"${mac}\"))))\n\nbindings = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"arp_binding\")\n  |> filter(fn: (r) => r.ip =~ cidrRe)\n  |> filter(fn: (r) => r.mac =~ macRe)\n\ncols = [\"ip\", \"mac\", \"vendor\", \"vlan\", \"_field\", \"_value\"]\npackets = bindings\n  |> filter(fn: (r) => r._field == \"packets\")\n  |> sum()\n  |> toFloat()\n  |> keep(columns: cols)\nfirst = bindings\n  |> filter(fn: (r) => r._field == \"first_seen\")\n  |> last()\n  |> map(fn: (r) => ({r with _value: float(v: r._value) * 1000.0}))\n  |> keep(columns: cols)\nlast = bindings\n  |> filter(fn: (r) => r._field == \"packets\")\n  |> last()\n  |> map(fn: (r) => ({r with _field: \"last_seen\", _value: float(v: int(v: r._time)) / 1000000.0}))\n  |> keep(columns: cols)\n\nunion(tables: [packets, first, last])\n  |> group()\n  |> map(fn: (r) => ({r with vendor: if exists r.vendor then r.vendor else \"\"}))\n  |> pivot(rowKey: [\"ip\", \"mac\", \"vendor\", \"vlan\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> sort(columns: [\"last_seen\"], desc: true)\n  |> limit(n: 1000)\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "IP"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 120
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Host drill-down for ${__value.raw}",
+                    "url": "/d/host-drilldown?${__url_time_range}&${site:queryparam}&var-ip=${__value.raw}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MAC"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 140
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Only this MAC",
+                    "url": "/d/ethernet-attacks?${__url_time_range}&${site:queryparam}&${severity:queryparam}&var-cidr=&var-mac=${__value.raw}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "VLAN"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 55
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ARP packets"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 95
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MAC first heard"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 160
+              },
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last heard"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 160
+              },
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "ip": 0,
+              "mac": 1,
+              "vendor": 2,
+              "vlan": 3,
+              "packets": 4,
+              "first_seen": 5,
+              "last_seen": 6
+            },
+            "renameByName": {
+              "ip": "IP",
+              "mac": "MAC",
+              "vendor": "Vendor",
+              "vlan": "VLAN",
+              "packets": "ARP packets",
+              "first_seen": "MAC first heard",
+              "last_seen": "Last heard"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Last heard",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "barchart",
+      "id": 14,
+      "title": "Devices by Vendor (top 15)",
+      "description": "Distinct MACs heard in range per vendor (CIDR / MAC boxes apply). \"(randomized)\" counts locally administered addresses -- phones, laptops and VMs that invent their own, the normal case on Wi-Fi today. A vendor that should not be on this network at all is worth a click in the Station Table's Vendor filter. One colour: the bars encode one magnitude.",
+      "gridPos": {
+        "h": 12,
+        "w": 8,
+        "x": 16,
+        "y": 41
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n// The MAC box is a prefix, so a whole vendor block (48:a9:8a) works too.\nmacRe = if \"${mac}\" == \"\" then /.*/\n    else regexp.compile(v: \"^\" + regexp.quoteMeta(v: strings.toLower(v: strings.trimSpace(v: \"${mac}\"))))\n\nbindings = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"arp_binding\")\n  |> filter(fn: (r) => r.ip =~ cidrRe)\n  |> filter(fn: (r) => r.mac =~ macRe)\n\nbindings\n  |> filter(fn: (r) => r._field == \"packets\")\n  |> last()\n  |> map(fn: (r) => ({r with vendor: if exists r.vendor then r.vendor else \"(no OUI database)\"}))\n  |> group(columns: [\"vendor\", \"mac\"])\n  |> first()\n  |> group(columns: [\"vendor\"])\n  |> count()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 15)\n  |> keep(columns: [\"vendor\", \"_value\"])\n  |> rename(columns: {_value: \"devices\"})\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3b82f6"
+          },
+          "custom": {
+            "fillOpacity": 85
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xField": "vendor",
+        "showValue": "auto",
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        },
+        "barWidth": 0.8,
+        "groupWidth": 0.7
+      }
+    },
+    {
+      "type": "stat",
+      "id": 15,
+      "title": "OUI Database",
+      "description": "Age of the local copy of the IEEE MAC registry (Wireshark's `manuf`: MA-L, MA-M and MA-S merged). dns-resolver keeps it current by itself, re-downloading it once it is a week old -- the publisher asks for no more than that. NOT LOADED means every vendor column is blank: check `docker compose logs dns-resolver | grep oui`, or set OUI_UPDATE=false and put a file in the `oui` volume by hand on an offline host. Always this host's database, whatever the Site box says -- a MAC's vendor is the same everywhere.",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 53
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://dns-resolver:8000/oui",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "computed_columns": [],
+          "columns": [
+            {
+              "selector": "age_days",
+              "text": "age",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "d",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "NOT LOADED",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#fab219",
+                "value": 10
+              },
+              {
+                "color": "#d03b3b",
+                "value": 30
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "NOT LOADED",
+                  "color": "#d03b3b",
+                  "index": 0
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 36
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Capture Drops",
+      "description": "ARP frames the kernel dropped before arp-watch read them, in range. Anything but NONE means the service fell behind (an ARP storm) and an alert may be missing. tzsp-decap's own UDP drops -- frames that never reached the tap -- are on the Suricata board's Pipeline Health chart.",
+      "id": 16,
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 53
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\nseen = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"arp_watch\" and r._field == \"capture_drops\")\n  |> sum()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "NONE",
+                  "color": "#0ca30c",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#d03b3b",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 40
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Protected Addresses",
+      "description": "How many addresses only their own MAC may claim: every router in mikrotik.host / mikrotik.<name>.host, plus arp_watch.protected. NONE means gateway spoofing can only show up as an ordinary conflict -- add your gateways to arp_watch.protected (pinned as ip=mac where you can: that also catches a poisoner already active when the service first started).",
+      "id": 17,
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 53
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\nseen = from(bucket: \"network_traffic\")\n  |> range(start: -15m)\n  |> filter(fn: (r) => r._measurement == \"arp_watch\" and r._field == \"protected\")\n  |> last()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, array.from(rows: [{_value: -1}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "NO DATA",
+                  "color": "#9ca3af",
+                  "index": 0
+                },
+                "0": {
+                  "text": "NONE",
+                  "color": "#ec835a",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3b82f6",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 40
+        }
+      }
+    },
+    {
+      "type": "text",
+      "id": 18,
+      "title": "Reading this board",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 53
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "ARP has no authentication: hosts believe the last reply they hear. **Spoofing** is answering for an address that is not yours; **poisoning** is doing it continuously so that traffic flows through you. The real owner keeps answering too, so an attack shows as two MACs *alternating* on one IP -- a single change is just a new lease.\n\nCoverage is the router's sniffer: every broadcast, but unicast replies only on the ports it sniffs. Alerts only -- an ARP sender is forgeable, so nothing is blocked."
+      }
+    }
+  ]
+}

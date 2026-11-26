@@ -1,0 +1,558 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "type": "table",
+      "title": "Fan-Out: Destinations per Source",
+      "description": "Distinct destination IPs contacted by each source over the range. A host touching many peers is a scanner, a broken service, or P2P. Amber above 20, red above 50 — tune those thresholds to your network; on a small LAN everything stays green.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\", \"dst_ip\"])\n  |> sum()\n  |> group(columns: [\"src_ip\"])\n  |> count()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 25)\n  |> keep(columns: [\"src_ip\", \"_value\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 20
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          },
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "color-background",
+              "mode": "gradient"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "src_ip"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Source IP"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "_value"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Distinct destinations"
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "src_ip": 0,
+              "_value": 1
+            },
+            "renameByName": {}
+          }
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Fan-Out over Time",
+      "description": "Distinct destinations per source in each 15-minute window, showing only sources that reach at least the Fan-out threshold. Without that threshold a large network emits thousands of series -- past Grafana's 1000-series cap, and unreadable anyway. A sudden vertical jump for one host is the scan signature worth chasing. The window is fixed at 15m rather than following the time picker, because windowing every source/destination pair at a finer grain does not finish on a busy network.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\", \"dst_ip\"])\n  |> aggregateWindow(every: 15m, fn: count, createEmpty: false)\n  |> group(columns: [\"src_ip\", \"_time\"])\n  |> count()\n  |> group()\n  |> filter(fn: (r) => r._value >= ${fanout_min})\n  |> group(columns: [\"src_ip\"])\n  |> sort(columns: [\"_time\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "displayName": "${__field.labels.src_ip}",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "Beacon Candidates",
+      "description": "Because active_timeout=5 caps duration_ms at ~5s, beacons cannot be found by flow duration — this ranks by repetition instead. Look for many 5-minute slots with flows/slot near 1 and a small mean size: that is something checking in on a timer. High flows/slot is an ordinary persistent connection (the VPN tunnel looks like that).",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "id": 3,
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nbase = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\", \"dst_ip\"])\n  |> aggregateWindow(every: 5m, fn: sum, timeSrc: \"_start\", createEmpty: false)\n\nraw = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\", \"dst_ip\"])\n\nunion(tables: [\n  base |> count() |> map(fn: (r) => ({src_ip: r.src_ip, dst_ip: r.dst_ip, k: \"slots\", v: r._value})),\n  base |> sum()   |> map(fn: (r) => ({src_ip: r.src_ip, dst_ip: r.dst_ip, k: \"bytes\", v: r._value})),\n  raw  |> count() |> map(fn: (r) => ({src_ip: r.src_ip, dst_ip: r.dst_ip, k: \"records\", v: r._value})),\n])\n  |> group()\n  |> pivot(rowKey: [\"src_ip\", \"dst_ip\"], columnKey: [\"k\"], valueColumn: \"v\")\n  |> map(fn: (r) => ({pair: r.src_ip + \" → \" + r.dst_ip,\n                      slots: r.slots, records: r.records, bytes: r.bytes,\n                      per_slot: float(v: r.records) / float(v: r.slots),\n                      mean_bytes: float(v: r.bytes) / float(v: r.records)}))\n  |> sort(columns: [\"slots\"], desc: true)\n  |> limit(n: 30)\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pair"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Source → Destination"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "slots"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "displayName",
+                "value": "5-min slots seen"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "records"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "displayName",
+                "value": "Flow records"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "per_slot"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "displayName",
+                "value": "Flows/slot"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bytes"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "displayName",
+                "value": "Bytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "mean_bytes"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "displayName",
+                "value": "Mean bytes/flow"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "pair": 0,
+              "slots": 1,
+              "records": 2,
+              "per_slot": 3,
+              "mean_bytes": 4,
+              "bytes": 5
+            },
+            "renameByName": {}
+          }
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "New Talker Pairs",
+      "description": "Source → destination pairs active in the selected range that never appeared in the preceding baseline window. Empty is the healthy answer on a stable network. Widen the time range or shorten the baseline to see more.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 19
+      },
+      "id": 4,
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"date\"\nimport \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nseen = (start, stop) => from(bucket: \"network_traffic\")\n  |> range(start: start, stop: stop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\", \"dst_ip\"])\n  |> first()\n  |> keep(columns: [\"src_ip\", \"dst_ip\"])\n  |> group()\n  |> map(fn: (r) => ({pair: r.src_ip + \" → \" + r.dst_ip}))\n\nrecent = seen(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> map(fn: (r) => ({pair: r.pair, era: 0}))\n\n// era stays 0 only for keys that never appear in the baseline window\nolder = seen(start: date.sub(from: v.timeRangeStart, d: ${baseline}), stop: v.timeRangeStart)\n  |> map(fn: (r) => ({pair: r.pair, era: 1}))\n\nunion(tables: [recent, older])\n  |> group(columns: [\"pair\"])\n  |> sum(column: \"era\")\n  |> group()\n  |> filter(fn: (r) => r.era == 0)\n  |> keep(columns: [\"pair\"])\n  |> sort(columns: [\"pair\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pair"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "New pair"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "title": "New Destinations",
+      "description": "Destination IPs contacted in the selected range but absent from the baseline window, regardless of which host reached them. Newly contacted external addresses are the ones worth a second look.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 19
+      },
+      "id": 5,
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"date\"\nimport \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nseen = (start, stop) => from(bucket: \"network_traffic\")\n  |> range(start: start, stop: stop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"dst_ip\"])\n  |> first()\n  |> keep(columns: [\"dst_ip\"])\n  |> group()\n  |> map(fn: (r) => ({dst_ip: r.dst_ip}))\n\nrecent = seen(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> map(fn: (r) => ({dst_ip: r.dst_ip, era: 0}))\n\n// era stays 0 only for keys that never appear in the baseline window\nolder = seen(start: date.sub(from: v.timeRangeStart, d: ${baseline}), stop: v.timeRangeStart)\n  |> map(fn: (r) => ({dst_ip: r.dst_ip, era: 1}))\n\nunion(tables: [recent, older])\n  |> group(columns: [\"dst_ip\"])\n  |> sum(column: \"era\")\n  |> group()\n  |> filter(fn: (r) => r.era == 0)\n  |> keep(columns: [\"dst_ip\"])\n  |> sort(columns: [\"dst_ip\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "dst_ip"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "New destination IP"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": [
+    "network",
+    "ndpi",
+    "tzsp",
+    "anomaly",
+    "security"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "site",
+        "type": "datasource",
+        "label": "Site",
+        "description": "Which tzsp-monitor instance these panels read. Remote sites are the REMOTE_SITE_* lines in properties.yml of the instance serving this Grafana; each is a datasource pointed at that site's own InfluxDB, so nothing is copied between sites. Controls never follow this box: rule suppression and reverse DNS only ever act on the local site, and are inert while another site is selected.",
+        "query": "influxdb",
+        "regex": "",
+        "current": {
+          "selected": false,
+          "text": "InfluxDB_Flux",
+          "value": "InfluxDB_Flux"
+        },
+        "options": [],
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1,
+        "skipUrlSync": false
+      },
+      {
+        "name": "cidr",
+        "type": "textbox",
+        "label": "CIDR filter",
+        "description": "Restrict every panel to traffic with either endpoint in this range, e.g. 10.12.0.0/16, 10.12.6.0/24, or a bare IP. Leave empty for no filter. Prefix lengths other than /8, /16, /24 and /32 round down to the enclosing octet boundary, so /20 behaves as /16 and may show a wider range than typed.",
+        "hide": 0,
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "skipUrlSync": false
+      },
+      {
+        "name": "baseline",
+        "type": "custom",
+        "label": "Baseline window",
+        "description": "How far back to look for 'have we seen this before'. Measured backwards from the start of the dashboard time range.",
+        "hide": 0,
+        "query": "24h,7d,14d,30d",
+        "options": [
+          {
+            "selected": false,
+            "text": "24h",
+            "value": "24h"
+          },
+          {
+            "selected": true,
+            "text": "7d",
+            "value": "7d"
+          },
+          {
+            "selected": false,
+            "text": "14d",
+            "value": "14d"
+          },
+          {
+            "selected": false,
+            "text": "30d",
+            "value": "30d"
+          }
+        ],
+        "current": {
+          "selected": true,
+          "text": "7d",
+          "value": "7d"
+        },
+        "multi": false,
+        "includeAll": false,
+        "skipUrlSync": false
+      },
+      {
+        "name": "fanout_min",
+        "type": "custom",
+        "label": "Fan-out threshold",
+        "description": "Minimum distinct destinations in a 15-minute window for a source to be plotted. Raise it on a busy network, lower it on a quiet one.",
+        "hide": 0,
+        "query": "3,5,10,25,50",
+        "options": [
+          {
+            "selected": false,
+            "text": "3",
+            "value": "3"
+          },
+          {
+            "selected": false,
+            "text": "5",
+            "value": "5"
+          },
+          {
+            "selected": true,
+            "text": "10",
+            "value": "10"
+          },
+          {
+            "selected": false,
+            "text": "25",
+            "value": "25"
+          },
+          {
+            "selected": false,
+            "text": "50",
+            "value": "50"
+          }
+        ],
+        "current": {
+          "selected": true,
+          "text": "10",
+          "value": "10"
+        },
+        "multi": false,
+        "includeAll": false,
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Anomaly Watch",
+  "uid": "anomaly-watch",
+  "version": 1
+}

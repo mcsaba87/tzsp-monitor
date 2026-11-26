@@ -1,0 +1,1005 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Monitoring Feed",
+      "description": "How long ago the last traffic record arrived. If this is not LIVE, every other panel on this screen is stale and nothing here can be trusted — escalate.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\n// Seconds since the newest flow record. The sentinel means a dead feed shows\n// NO DATA rather than an empty tile, which would look the same as \"quiet\".\nlatest = from(bucket: \"network_traffic\")\n  |> range(start: -6h, stop: now())\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> group()\n  |> max(column: \"_time\")\n  |> map(fn: (r) => ({age: float(v: int(v: now()) - int(v: r._time)) / 1000000000.0}))\n  |> keep(columns: [\"age\"])\n\nunion(tables: [latest, array.from(rows: [{age: 99999.0}])])\n  |> group()\n  |> min(column: \"age\")\n  |> rename(columns: {age: \"_value\"})\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 120,
+                "result": {
+                  "text": "LIVE",
+                  "color": "#0ca30c",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 120,
+                "to": 600,
+                "result": {
+                  "text": "LAGGING",
+                  "color": "#fab219",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 600,
+                "to": 999999,
+                "result": {
+                  "text": "NO DATA",
+                  "color": "#d03b3b",
+                  "index": 2
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#d03b3b",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 18,
+          "valueSize": 46
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Traffic Now",
+      "description": "Current throughput across the mirror, with the recent trend behind it. Shown without a colour threshold on purpose: there is no fixed link capacity to alarm against, so judge it against the 'vs Yesterday' tile.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "id": 2,
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> aggregateWindow(every: 5m, fn: sum, createEmpty: false)\n  |> group()\n  |> aggregateWindow(every: 5m, fn: sum, createEmpty: false)\n  |> map(fn: (r) => ({_time: r._time, _value: float(v: r._value) * 8.0 / 300.0}))\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps",
+          "decimals": 1,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 18,
+          "valueSize": 38
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "vs Yesterday",
+      "description": "Traffic in the last hour compared with the same hour yesterday. Measured on this network the ratio has a median of 98% and stays between 94% and 196% -- the upper end is the normal morning ramp, which is why NORMAL runs all the way to 250%: a band that went amber every morning would just be ignored. A collapse can mean an outage upstream, not merely a quiet network. Widen these bands if your traffic is burstier.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "id": 3,
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\nwin = (start, stop, tag) => from(bucket: \"network_traffic\")\n  |> range(start: start, stop: stop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> group()\n  |> sum()\n  |> map(fn: (r) => ({k: \"x\", w: tag, v: float(v: r._value)}))\n\n// Zero rows for both sides so the pivot always has both columns, even if one\n// window is empty.\nzero = array.from(rows: [{k: \"x\", w: \"now\", v: 0.0}, {k: \"x\", w: \"yest\", v: 0.0}])\n\nunion(tables: [\n  win(start: -1h, stop: now(), tag: \"now\"),\n  win(start: -25h, stop: -24h, tag: \"yest\"),\n  zero,\n])\n  |> group(columns: [\"k\", \"w\"])\n  |> sum(column: \"v\")\n  |> group()\n  |> pivot(rowKey: [\"k\"], columnKey: [\"w\"], valueColumn: \"v\")\n  |> map(fn: (r) => ({r with _value:\n      if r.yest > 0.0 then r.now / r.yest * 100.0 else -1.0}))\n  |> keep(columns: [\"_value\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": -1000,
+                "to": 0,
+                "result": {
+                  "text": "NO BASELINE",
+                  "color": "#9ca3af",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 50,
+                "result": {
+                  "text": "WAY DOWN",
+                  "color": "#ec835a",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 50,
+                "to": 85,
+                "result": {
+                  "text": "LOW",
+                  "color": "#fab219",
+                  "index": 2
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 85,
+                "to": 250,
+                "result": {
+                  "text": "NORMAL",
+                  "color": "#0ca30c",
+                  "index": 3
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 250,
+                "to": 450,
+                "result": {
+                  "text": "HIGH",
+                  "color": "#fab219",
+                  "index": 4
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 450,
+                "to": 1000000,
+                "result": {
+                  "text": "SPIKE",
+                  "color": "#d03b3b",
+                  "index": 5
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 18,
+          "valueSize": 40
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Active Hosts",
+      "description": "Distinct hosts seen sending traffic in the last 15 minutes. Context rather than an alarm — a sudden collapse usually shows up in 'vs Yesterday' first.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "id": 4,
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\n// first() per series is a pushdown selector: one row per distinct source.\nseen = from(bucket: \"network_traffic\")\n  |> range(start: -15m, stop: now())\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> group(columns: [\"src_ip\"])\n  |> first()\n  |> group()\n  |> count(column: \"_value\")\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 18,
+          "valueSize": 46
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Peak Fan-Out",
+      "description": "The most destinations any single host contacted in the last 15 minutes. Two infrastructure hosts here normally sit in the 60-83 range, so NORMAL runs to 120 to leave them headroom. A host suddenly reaching hundreds of destinations is scanning.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "id": 5,
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\n// Highest number of distinct destinations reached by any one host in 15\n// minutes. Shown as a number rather than an alert count, because two\n// infrastructure hosts here legitimately sit in the 60-80 range.\npeak = from(bucket: \"network_traffic\")\n  |> range(start: -15m, stop: now())\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> group(columns: [\"src_ip\", \"dst_ip\"])\n  |> first()\n  |> group(columns: [\"src_ip\"])\n  |> count()\n  |> group()\n  |> max()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [peak, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 120,
+                "result": {
+                  "text": "NORMAL",
+                  "color": "#0ca30c",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 120,
+                "to": 250,
+                "result": {
+                  "text": "CHECK",
+                  "color": "#fab219",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 250,
+                "to": 100000,
+                "result": {
+                  "text": "SCANNING",
+                  "color": "#d03b3b",
+                  "index": 2
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 18,
+          "valueSize": 40
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Busiest Host Share",
+      "description": "Share of all traffic generated by the single busiest host in the last 15 minutes. One host taking most of the link is normal during a big transfer, but sustained dominance is worth naming when you escalate.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "id": 6,
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\nper = from(bucket: \"network_traffic\")\n  |> range(start: -15m, stop: now())\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> group(columns: [\"src_ip\"])\n  |> sum()\n\ntop = per |> group() |> max() |> map(fn: (r) => ({k: \"x\", w: \"top\", v: float(v: r._value)}))\ntot = per |> group() |> sum() |> map(fn: (r) => ({k: \"x\", w: \"tot\", v: float(v: r._value)}))\nzero = array.from(rows: [{k: \"x\", w: \"top\", v: 0.0}, {k: \"x\", w: \"tot\", v: 0.0}])\n\nunion(tables: [top, tot, zero])\n  |> group(columns: [\"k\", \"w\"])\n  |> sum(column: \"v\")\n  |> group()\n  |> pivot(rowKey: [\"k\"], columnKey: [\"w\"], valueColumn: \"v\")\n  |> map(fn: (r) => ({r with _value:\n      if r.tot > 0.0 then r.top / r.tot * 100.0 else 0.0}))\n  |> keep(columns: [\"_value\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 65,
+                "result": {
+                  "text": "SPREAD",
+                  "color": "#0ca30c",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 65,
+                "to": 85,
+                "result": {
+                  "text": "CONCENTRATED",
+                  "color": "#fab219",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 85,
+                "to": 101,
+                "result": {
+                  "text": "ONE HOST",
+                  "color": "#ec835a",
+                  "index": 2
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 18,
+          "valueSize": 40
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Traffic — now vs same time yesterday",
+      "description": "Today's throughput over the selected window, with yesterday's same hours behind it for reference. If the two lines track each other, the network is behaving normally. A sustained gap is the thing to report.",
+      "gridPos": {
+        "h": 11,
+        "w": 16,
+        "x": 0,
+        "y": 5
+      },
+      "id": 7,
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> aggregateWindow(every: 5m, fn: sum, createEmpty: false)\n  |> group()\n  |> aggregateWindow(every: 5m, fn: sum, createEmpty: false)\n  |> map(fn: (r) => ({_time: r._time, _value: float(v: r._value) * 8.0 / 300.0, series: \"Now\"}))\n  |> group(columns: [\"series\"])\n"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"date\"\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: date.sub(from: v.timeRangeStart, d: 24h), stop: date.sub(from: v.timeRangeStop, d: 24h))\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> aggregateWindow(every: 5m, fn: sum, createEmpty: false)\n  |> group()\n  |> aggregateWindow(every: 5m, fn: sum, createEmpty: false)\n  |> timeShift(duration: 24h)\n  |> map(fn: (r) => ({_time: r._time, _value: float(v: r._value) * 8.0 / 300.0, series: \"Same time yesterday\"}))\n  |> group(columns: [\"series\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps",
+          "displayName": "${__field.labels.series}",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "axisLabel": "throughput"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "A"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3b82f6"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9ca3af"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    8,
+                    6
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "Busiest Hosts",
+      "description": "The hosts moving the most data right now, with their names resolved so you can say who it is rather than reading out an IP address. Country is from a local GeoIP database (IP geolocation by DB-IP, db-ip.com); \"private network\" for any non-public address.",
+      "gridPos": {
+        "h": 11,
+        "w": 8,
+        "x": 16,
+        "y": 5
+      },
+      "id": 8,
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> group(columns: [\"src_ip\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 8)\n  |> rename(columns: {src_ip: \"ip\", _value: \"bytes\"})\n  |> keep(columns: [\"ip\", \"bytes\"])\n"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://dns-resolver:8000/resolve?ips=${health_talkers:csv}&site=${site}",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "ip",
+              "text": "ip",
+              "type": "string"
+            },
+            {
+              "selector": "host",
+              "text": "host",
+              "type": "string"
+            },
+            {
+              "selector": "country",
+              "text": "country",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Bytes"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "ip",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^host.*$",
+            "renamePattern": "host"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^country.*$",
+            "renamePattern": "Country"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "host": 0,
+              "ip": 2,
+              "bytes": 3,
+              "Country": 1
+            },
+            "renameByName": {
+              "ip": "IP",
+              "host": "Host",
+              "bytes": "Bytes"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": "",
+            "sort": [
+              {
+                "field": "Bytes",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "type": "bargauge",
+      "title": "What's running on the network",
+      "description": "Traffic grouped by what kind of application it is. Useful for answering \"what is all this?\" without reading a single port number.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "id": 9,
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> group(columns: [\"category\"])\n  |> sum()\n  |> keep(columns: [\"category\", \"_value\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "displayName": "${__field.labels.category}",
+          "color": {
+            "mode": "continuous-BlPu"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "Busiest conversations",
+      "description": "The single heaviest source-to-destination pairs. This is the line to quote when escalating: who is talking to whom, and how much.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "id": 10,
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> group(columns: [\"src_ip\", \"dst_ip\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 8)\n  |> keep(columns: [\"src_ip\", \"dst_ip\", \"_value\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "_value"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "displayName",
+                "value": "Bytes"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "src_ip": 0,
+              "dst_ip": 1,
+              "_value": 2
+            },
+            "renameByName": {
+              "src_ip": "From",
+              "dst_ip": "To"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": [
+    "network",
+    "tzsp",
+    "health",
+    "noc",
+    "wallboard"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "site",
+        "type": "datasource",
+        "label": "Site",
+        "description": "Which tzsp-monitor instance these panels read. Remote sites are the REMOTE_SITE_* lines in properties.yml of the instance serving this Grafana; each is a datasource pointed at that site's own InfluxDB, so nothing is copied between sites. Controls never follow this box: rule suppression and reverse DNS only ever act on the local site, and are inert while another site is selected.",
+        "query": "influxdb",
+        "regex": "",
+        "current": {
+          "selected": false,
+          "text": "InfluxDB_Flux",
+          "value": "InfluxDB_Flux"
+        },
+        "options": [],
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1,
+        "skipUrlSync": false
+      },
+      {
+        "name": "health_talkers",
+        "type": "query",
+        "label": "Busiest hosts (internal)",
+        "description": "Hidden helper: the 8 busiest source IPs, fed to the reverse-DNS resolver.",
+        "hide": 2,
+        "datasource": {
+          "type": "influxdb",
+          "uid": "${site}"
+        },
+        "definition": "top 8 src_ip by bytes",
+        "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> group(columns: [\"src_ip\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 8)\n  |> keep(columns: [\"src_ip\"])\n  |> rename(columns: {src_ip: \"_value\"})\n",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": null,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      }
+    ]
+  },
+  "refresh": "1m",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Network Health",
+  "uid": "network-health",
+  "version": 1
+}

@@ -1,0 +1,1483 @@
+{
+ "annotations": {
+  "list": []
+ },
+ "editable": true,
+ "fiscalYearStartMonth": 0,
+ "graphTooltip": 1,
+ "id": null,
+ "uid": "alerting",
+ "links": [],
+ "liveNow": false,
+ "panels": [
+  {
+   "type": "stat",
+   "id": 1,
+   "title": "Alerter",
+   "description": "What the alerter is doing. ARMED: at least one source is on and has a command (its own or the default). NO COMMAND: sources are on but nothing would run -- set a command below. NOTHING ENABLED: no source is switched on. QUERY FAILING: a source's InfluxDB query failed on the last poll (see `docker compose logs alerter`). NOT RUNNING: no health point in the last 5 minutes -- the service is stopped or was never started.",
+   "gridPos": {
+    "h": 5,
+    "w": 6,
+    "x": 0,
+    "y": 0
+   },
+   "datasource": {
+    "type": "influxdb",
+    "uid": "${site}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "${site}"
+     },
+     "query": "import \"array\"\n\nlatest = from(bucket: \"network_traffic\")\n  |> range(start: -5m)\n  |> filter(fn: (r) => r._measurement == \"alerter\" and r._field == \"state_code\")\n  |> last()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [latest, array.from(rows: [{_value: -1}])])\n  |> max()\n",
+     "rawQuery": true,
+     "resultFormat": "time_series"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "-1": {
+         "text": "NOT RUNNING",
+         "color": "#9ca3af",
+         "index": 0
+        },
+        "0": {
+         "text": "QUERY FAILING",
+         "color": "#d03b3b",
+         "index": 1
+        },
+        "1": {
+         "text": "NOTHING ENABLED",
+         "color": "#fab219",
+         "index": 2
+        },
+        "2": {
+         "text": "NO COMMAND",
+         "color": "#ec835a",
+         "index": 3
+        },
+        "3": {
+         "text": "ARMED",
+         "color": "#0ca30c",
+         "index": 4
+        }
+       }
+      }
+     ],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#9ca3af",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "orientation": "auto",
+    "textMode": "value",
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false,
+    "text": {
+     "titleSize": 16,
+     "valueSize": 30
+    }
+   }
+  },
+  {
+   "type": "stat",
+   "id": 2,
+   "title": "Control",
+   "description": "ENABLED: the links and boxes on this board change the rules. READ-ONLY: ALERTING_CONTROL=ro in the host's .env; commands still run, nothing here changes them. OTHER SITE: the Site box points at another instance; this board only ever acts on the instance serving it.\n\nAnyone who can open this dashboard can change a command, and a command is a shell command on this host: the Infinity datasource calls the alerter with its own identity, not the viewer's. That is why a typed command only takes effect after Confirm (a one-time code), and why commands run as nobody with no access to the stack's credentials. Every change is audited in alerting_control.",
+   "gridPos": {
+    "h": 5,
+    "w": 4,
+    "x": 6,
+    "y": 0
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://alerter:8090/status?enable=${enable:percentencode}&disable=${disable:percentencode}&severity=${severity:percentencode}&command_for=${command_for:percentencode}&command=${command:percentencode}&confirm=${confirm:percentencode}&cancel=${cancel:percentencode}&test=${test:percentencode}&site=${site}",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "control",
+       "text": "control",
+       "type": "number"
+      }
+     ]
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "READ-ONLY",
+         "color": "#fab219",
+         "index": 0
+        },
+        "1": {
+         "text": "ENABLED",
+         "color": "#0ca30c",
+         "index": 1
+        },
+        "2": {
+         "text": "OTHER SITE",
+         "color": "#9ca3af",
+         "index": 2
+        }
+       }
+      }
+     ],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#9ca3af",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "orientation": "auto",
+    "textMode": "value",
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false,
+    "text": {
+     "titleSize": 16,
+     "valueSize": 30
+    }
+   }
+  },
+  {
+   "type": "stat",
+   "id": 3,
+   "title": "Last Change",
+   "description": "The last change made from this board since the alerter started, or why the last attempt was refused.",
+   "gridPos": {
+    "h": 5,
+    "w": 8,
+    "x": 10,
+    "y": 0
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://alerter:8090/status?enable=${enable:percentencode}&disable=${disable:percentencode}&severity=${severity:percentencode}&command_for=${command_for:percentencode}&command=${command:percentencode}&confirm=${confirm:percentencode}&cancel=${cancel:percentencode}&test=${test:percentencode}&site=${site}",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "message",
+       "text": "message",
+       "type": "string"
+      }
+     ]
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#9ca3af",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "/.*/",
+     "values": false
+    },
+    "orientation": "auto",
+    "textMode": "value",
+    "colorMode": "none",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false,
+    "text": {
+     "titleSize": 16,
+     "valueSize": 16
+    }
+   }
+  },
+  {
+   "type": "stat",
+   "id": 4,
+   "title": "Commands Run",
+   "description": "Commands that exited 0 in the dashboard's time range (tests included).",
+   "gridPos": {
+    "h": 5,
+    "w": 3,
+    "x": 18,
+    "y": 0
+   },
+   "datasource": {
+    "type": "influxdb",
+    "uid": "${site}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "${site}"
+     },
+     "query": "import \"array\"\n\nran = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"alert_dispatch\" and r._field == \"count\")\n  |> filter(fn: (r) => r.result == \"ok\" or r.result == \"test-ok\")\n  |> sum()\n  |> group()\n  |> sum()\n\nunion(tables: [ran, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> sum()\n",
+     "rawQuery": true,
+     "resultFormat": "time_series"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#3b82f6",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "orientation": "auto",
+    "textMode": "value",
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false,
+    "text": {
+     "titleSize": 16,
+     "valueSize": 36
+    }
+   }
+  },
+  {
+   "type": "stat",
+   "id": 5,
+   "title": "Failed",
+   "description": "Alerts whose command did not succeed in the time range: a non-zero exit, a timeout (ALERTING_COMMAND_TIMEOUT), or held back by the per-minute cap (ALERTING_MAX_PER_MINUTE) or a full queue. Recent Alerts below says which and shows the command's output.",
+   "gridPos": {
+    "h": 5,
+    "w": 3,
+    "x": 21,
+    "y": 0
+   },
+   "datasource": {
+    "type": "influxdb",
+    "uid": "${site}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "${site}"
+     },
+     "query": "import \"array\"\n\nbad = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"alert_dispatch\" and r._field == \"count\")\n  |> filter(fn: (r) => r.result !~ /^(ok|test-ok)$/)\n  |> sum()\n  |> group()\n  |> sum()\n\nunion(tables: [bad, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> sum()\n",
+     "rawQuery": true,
+     "resultFormat": "time_series"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "NONE",
+         "color": "#0ca30c",
+         "index": 0
+        }
+       }
+      }
+     ],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#0ca30c",
+        "value": null
+       },
+       {
+        "color": "#d03b3b",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "orientation": "auto",
+    "textMode": "value",
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false,
+    "text": {
+     "titleSize": 16,
+     "valueSize": 36
+    }
+   }
+  },
+  {
+   "type": "table",
+   "id": 6,
+   "title": "Alert Rules -- click a cell to change it",
+   "description": "One row per detector. Click On/Off to switch a source, Alert at to choose the lowest severity that runs the command (1 critical ... 4 info), Command to edit it (the Command box at the top is filled in; change it there, then Confirm it in Pending Command Change), and Send test to run the command once with a made-up alert. A source without a command of its own runs the Default command.\n\nSwitching a source on, or lowering its threshold, does not fire what is already in the last 10 minutes: only what arrives afterwards alerts. A repeat of the same thing (same signature and hosts, same ARP alert and address, same scanner...) is held for ALERTING_REPEAT_SECONDS (1 h) and the next command carries how many were held ($ALERT_REPEATS).\n\nThis panel is the one that sends the boxes, so it always shows the state after the change.",
+   "gridPos": {
+    "h": 10,
+    "w": 24,
+    "x": 0,
+    "y": 5
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://alerter:8090/apply?enable=${enable:percentencode}&disable=${disable:percentencode}&severity=${severity:percentencode}&command_for=${command_for:percentencode}&command=${command:percentencode}&confirm=${confirm:percentencode}&cancel=${cancel:percentencode}&test=${test:percentencode}&site=${site}",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "name",
+       "text": "name",
+       "type": "string"
+      },
+      {
+       "selector": "enabled",
+       "text": "enabled",
+       "type": "number"
+      },
+      {
+       "selector": "severity_text",
+       "text": "severity_text",
+       "type": "string"
+      },
+      {
+       "selector": "effective_command",
+       "text": "effective_command",
+       "type": "string"
+      },
+      {
+       "selector": "command_origin",
+       "text": "command_origin",
+       "type": "string"
+      },
+      {
+       "selector": "test_token",
+       "text": "test_token",
+       "type": "string"
+      },
+      {
+       "selector": "last_at",
+       "text": "last_at",
+       "type": "string"
+      },
+      {
+       "selector": "last_result",
+       "text": "last_result",
+       "type": "string"
+      },
+      {
+       "selector": "about",
+       "text": "about",
+       "type": "string"
+      },
+      {
+       "selector": "source",
+       "text": "source",
+       "type": "string"
+      },
+      {
+       "selector": "command",
+       "text": "command",
+       "type": "string"
+      }
+     ]
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "filterable": false,
+      "cellOptions": {
+       "type": "auto"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "On"
+      },
+      "properties": [
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "1": {
+            "text": "ON",
+            "color": "#0ca30c",
+            "index": 0
+           },
+           "0": {
+            "text": "OFF",
+            "color": "#9ca3af",
+            "index": 1
+           },
+           "-1": {
+            "text": "--",
+            "color": "transparent",
+            "index": 2
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background"
+        }
+       },
+       {
+        "id": "custom.width",
+        "value": 80
+       },
+       {
+        "id": "links",
+        "value": [
+         {
+          "title": "Switch on",
+          "targetBlank": false,
+          "url": "/d/alerting?${__url_time_range}&${site:queryparam}&var-enable=&var-disable=&var-severity=&var-confirm=&var-cancel=&var-test=&var-command_for=&var-command=&var-enable=${__data.fields.source}"
+         },
+         {
+          "title": "Switch off",
+          "targetBlank": false,
+          "url": "/d/alerting?${__url_time_range}&${site:queryparam}&var-enable=&var-disable=&var-severity=&var-confirm=&var-cancel=&var-test=&var-command_for=&var-command=&var-disable=${__data.fields.source}"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Alert at"
+      },
+      "properties": [
+       {
+        "id": "links",
+        "value": [
+         {
+          "title": "1 critical only",
+          "targetBlank": false,
+          "url": "/d/alerting?${__url_time_range}&${site:queryparam}&var-enable=&var-disable=&var-severity=&var-confirm=&var-cancel=&var-test=&var-command_for=&var-command=&var-severity=${__data.fields.source}:1"
+         },
+         {
+          "title": "2 high and above",
+          "targetBlank": false,
+          "url": "/d/alerting?${__url_time_range}&${site:queryparam}&var-enable=&var-disable=&var-severity=&var-confirm=&var-cancel=&var-test=&var-command_for=&var-command=&var-severity=${__data.fields.source}:2"
+         },
+         {
+          "title": "3 medium and above",
+          "targetBlank": false,
+          "url": "/d/alerting?${__url_time_range}&${site:queryparam}&var-enable=&var-disable=&var-severity=&var-confirm=&var-cancel=&var-test=&var-command_for=&var-command=&var-severity=${__data.fields.source}:3"
+         },
+         {
+          "title": "4 everything, info too",
+          "targetBlank": false,
+          "url": "/d/alerting?${__url_time_range}&${site:queryparam}&var-enable=&var-disable=&var-severity=&var-confirm=&var-cancel=&var-test=&var-command_for=&var-command=&var-severity=${__data.fields.source}:4"
+         }
+        ]
+       },
+       {
+        "id": "custom.width",
+        "value": 170
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Command"
+      },
+      "properties": [
+       {
+        "id": "links",
+        "value": [
+         {
+          "title": "Edit this command (fills the Command box at the top)",
+          "targetBlank": false,
+          "url": "/d/alerting?${__url_time_range}&${site:queryparam}&var-enable=&var-disable=&var-severity=&var-confirm=&var-cancel=&var-test=&var-command_for=${__data.fields.source}&var-command=${__data.fields.command:percentencode}"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Test"
+      },
+      "properties": [
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "regex",
+          "options": {
+           "pattern": ".+",
+           "result": {
+            "text": "Send test",
+            "index": 0
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.width",
+        "value": 100
+       },
+       {
+        "id": "links",
+        "value": [
+         {
+          "title": "Run the command once with a test alert",
+          "targetBlank": false,
+          "url": "/d/alerting?${__url_time_range}&${site:queryparam}&var-enable=&var-disable=&var-severity=&var-confirm=&var-cancel=&var-test=&var-command_for=&var-command=&var-test=${__data.fields.source}:${__data.fields.test_token}"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Uses"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 80
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Last result"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 120
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "regex",
+          "options": {
+           "pattern": "^(test-)?ok$",
+           "result": {
+            "color": "#0ca30c",
+            "index": 0
+           }
+          }
+         },
+         {
+          "type": "regex",
+          "options": {
+           "pattern": ".+",
+           "result": {
+            "color": "#d03b3b",
+            "index": 1
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": "^(source|command)$"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+   },
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "indexByName": {
+       "name": 0,
+       "enabled": 1,
+       "severity_text": 2,
+       "effective_command": 3,
+       "command_origin": 4,
+       "test_token": 5,
+       "last_result": 6,
+       "last_at": 7,
+       "about": 8,
+       "source": 9,
+       "command": 10
+      },
+      "renameByName": {
+       "name": "Source",
+       "enabled": "On",
+       "severity_text": "Alert at",
+       "effective_command": "Command",
+       "command_origin": "Uses",
+       "test_token": "Test",
+       "last_result": "Last result",
+       "last_at": "Last run (UTC)",
+       "about": "What it alerts on"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "type": "table",
+   "id": 7,
+   "title": "Pending Command Change -- Confirm to apply",
+   "description": "A command typed into the Command box is staged here, not applied. Confirm carries a one-time code the alerter made when the change was staged, so a link that someone else prepared with a command in it cannot apply it by being opened. A staged change expires after 15 minutes. Empty: nothing staged.",
+   "gridPos": {
+    "h": 5,
+    "w": 24,
+    "x": 0,
+    "y": 15
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://alerter:8090/pending?enable=${enable:percentencode}&disable=${disable:percentencode}&severity=${severity:percentencode}&command_for=${command_for:percentencode}&command=${command:percentencode}&confirm=${confirm:percentencode}&cancel=${cancel:percentencode}&test=${test:percentencode}&site=${site}",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "name",
+       "text": "name",
+       "type": "string"
+      },
+      {
+       "selector": "current",
+       "text": "current",
+       "type": "string"
+      },
+      {
+       "selector": "new",
+       "text": "new",
+       "type": "string"
+      },
+      {
+       "selector": "expires",
+       "text": "expires",
+       "type": "string"
+      },
+      {
+       "selector": "confirm",
+       "text": "confirm",
+       "type": "string"
+      },
+      {
+       "selector": "cancel",
+       "text": "cancel",
+       "type": "string"
+      },
+      {
+       "selector": "code",
+       "text": "code",
+       "type": "string"
+      }
+     ]
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Confirm"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 100
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background"
+        }
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#0ca30c"
+        }
+       },
+       {
+        "id": "links",
+        "value": [
+         {
+          "title": "Apply this command",
+          "targetBlank": false,
+          "url": "/d/alerting?${__url_time_range}&${site:queryparam}&var-enable=&var-disable=&var-severity=&var-confirm=&var-cancel=&var-test=&var-command_for=&var-command=&var-confirm=${__data.fields.code}"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Cancel"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 100
+       },
+       {
+        "id": "links",
+        "value": [
+         {
+          "title": "Discard this change",
+          "targetBlank": false,
+          "url": "/d/alerting?${__url_time_range}&${site:queryparam}&var-enable=&var-disable=&var-severity=&var-confirm=&var-cancel=&var-test=&var-command_for=&var-command=&var-cancel=${__data.fields.code}"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "code"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+   },
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "indexByName": {
+       "name": 0,
+       "current": 1,
+       "new": 2,
+       "expires": 3,
+       "confirm": 4,
+       "cancel": 5,
+       "code": 6
+      },
+      "renameByName": {
+       "name": "For",
+       "current": "Current command",
+       "new": "New command",
+       "expires": "Expires (UTC)",
+       "confirm": "Confirm",
+       "cancel": "Cancel"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "id": 8,
+   "title": "Alerts Sent, by Source",
+   "description": "Commands run per source (tests included), in ~96 buckets across the time range, labelled by the bucket's start.",
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 20
+   },
+   "datasource": {
+    "type": "influxdb",
+    "uid": "${site}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "${site}"
+     },
+     "query": "spanNs = int(v: v.timeRangeStop) - int(v: v.timeRangeStart)\nevery = if spanNs / 96 < int(v: 1m) then 1m else duration(v: spanNs / 96)\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"alert_dispatch\" and r._field == \"count\")\n  |> aggregateWindow(every: every, fn: sum, createEmpty: false, timeSrc: \"_start\")\n  |> group(columns: [\"source\"])\n  |> aggregateWindow(every: every, fn: sum, createEmpty: false, timeSrc: \"_start\")\n  |> map(fn: (r) => ({r with _field: r.source}))\n",
+     "rawQuery": true,
+     "resultFormat": "time_series"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "drawStyle": "bars",
+      "fillOpacity": 80,
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      },
+      "barAlignment": 1,
+      "lineWidth": 1
+     },
+     "color": {
+      "mode": "palette-classic-by-name"
+     },
+     "displayName": "${__field.labels.source}",
+     "unit": "none",
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "type": "table",
+   "id": 9,
+   "title": "Rule Changes",
+   "description": "Every change made from this board (alerting_control): switches, thresholds, confirmed commands, tests. When, never who -- the same gap as the other control surfaces.",
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 20
+   },
+   "datasource": {
+    "type": "influxdb",
+    "uid": "${site}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "${site}"
+     },
+     "rawQuery": true,
+     "resultFormat": "table",
+     "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"alerting_control\" and r._field == \"detail\")\n  |> group()\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 100)\n  |> keep(columns: [\"_time\", \"action\", \"source\", \"_value\"])\n"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+   },
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "indexByName": {
+       "_time": 0,
+       "action": 1,
+       "source": 2,
+       "_value": 3
+      },
+      "renameByName": {
+       "_time": "Time",
+       "action": "Action",
+       "source": "Source",
+       "_value": "Detail"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "type": "table",
+   "id": 10,
+   "title": "Recent Alerts",
+   "description": "The last 200 alerts in the time range and what their command did. Result: ok, failed (non-zero exit), timeout, error (could not start), rate-limited (over ALERTING_MAX_PER_MINUTE), queue-full; test-* for the Send test links. Output is the first 1000 characters the command printed. Repeats: how many of the same alert the cooldown held back before this one.",
+   "gridPos": {
+    "h": 12,
+    "w": 24,
+    "x": 0,
+    "y": 28
+   },
+   "datasource": {
+    "type": "influxdb",
+    "uid": "${site}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "${site}"
+     },
+     "rawQuery": true,
+     "resultFormat": "table",
+     "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"alert_dispatch\")\n  |> filter(fn: (r) => r._field == \"title\" or r._field == \"exit_code\" or r._field == \"duration_ms\" or r._field == \"output\" or r._field == \"repeats\")\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> group()\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 200)\n  |> keep(columns: [\"_time\", \"severity\", \"source\", \"type\", \"result\", \"title\", \"repeats\", \"exit_code\", \"duration_ms\", \"output\"])\n"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "filterable": true
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Severity"
+      },
+      "properties": [
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "1": {
+            "text": "1 critical",
+            "color": "#d03b3b",
+            "index": 0
+           },
+           "2": {
+            "text": "2 high",
+            "color": "#ec835a",
+            "index": 1
+           },
+           "3": {
+            "text": "3 medium",
+            "color": "#e3c93c",
+            "index": 2
+           },
+           "4": {
+            "text": "4 info",
+            "color": "#3b82f6",
+            "index": 3
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       },
+       {
+        "id": "custom.width",
+        "value": 100
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Result"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 110
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "regex",
+          "options": {
+           "pattern": "^(test-)?ok$",
+           "result": {
+            "color": "#0ca30c",
+            "index": 0
+           }
+          }
+         },
+         {
+          "type": "regex",
+          "options": {
+           "pattern": ".+",
+           "result": {
+            "color": "#d03b3b",
+            "index": 1
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "ms"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "ms"
+       },
+       {
+        "id": "custom.width",
+        "value": 80
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Exit"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 60
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Repeats"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 80
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+   },
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "indexByName": {
+       "_time": 0,
+       "severity": 1,
+       "source": 2,
+       "type": 3,
+       "result": 4,
+       "title": 5,
+       "repeats": 6,
+       "exit_code": 7,
+       "duration_ms": 8,
+       "output": 9
+      },
+      "renameByName": {
+       "_time": "Time",
+       "severity": "Severity",
+       "source": "Source",
+       "type": "Type",
+       "result": "Result",
+       "title": "Alert",
+       "repeats": "Repeats",
+       "exit_code": "Exit",
+       "duration_ms": "ms",
+       "output": "Output"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "type": "text",
+   "id": 11,
+   "title": "Command Reference",
+   "gridPos": {
+    "h": 20,
+    "w": 24,
+    "x": 0,
+    "y": 40
+   },
+   "options": {
+    "mode": "markdown",
+    "content": "### Writing a command\n\nThe command runs with `/bin/sh -c` in the alerter container, as user **nobody**, for each alert -- at most `ALERTING_PARALLEL` (4) at a time, killed after `ALERTING_COMMAND_TIMEOUT` (20 s) together with anything it started. `curl`, `wget` and `jq` are installed; `/tmp` is the only writable place. Quote the variables (`\"$ALERT_TITLE\"`): titles carry whatever an attacker put in a hostname or an SSID.\n\n| Variable | Contents |\n|---|---|\n| `ALERT_SOURCE` | `suricata`, `dns`, `arp`, `wids`, `scan`, `reputation` |\n| `ALERT_TYPE` | what happened: `suricata.alert`, `dns.blocked`, `arp.gateway_spoof`, `wids.evil_twin`, `scan.internal`, `reputation.outbound`, ... (`<source>.test` for Send test) |\n| `ALERT_SEVERITY` / `ALERT_SEVERITY_NAME` | `1`..`4` / `critical`, `high`, `medium`, `info` |\n| `ALERT_TITLE` | one line, ready for a chat message |\n| `ALERT_DETAILS` | `key: value` lines -- every detail below |\n| `ALERT_JSON` | all of it as one JSON object: post it as it is |\n| `ALERT_TIME`, `ALERT_EPOCH` | when it happened (UTC) |\n| `ALERT_SITE`, `ALERT_URL` | `ALERTING_SITE`, and a dashboard link when `ALERTING_GRAFANA_URL` is set |\n| `ALERT_REPEATS` | how many of the same alert the cooldown held back before this one |\n| `ALERT_TEST` | `1` for Send test |\n| `ALERT_SRC_IP`, `ALERT_DST_IP`, `ALERT_SIGNATURE`, `ALERT_SID`, `ALERT_QNAME`, `ALERT_LIST`, `ALERT_IP`, `ALERT_MAC`, `ALERT_BSSID`, `ALERT_SSID`, `ALERT_INTERNAL_IP`, `ALERT_REMOTE_IP`, `ALERT_FEED`, ... | each detail of the alert, upper-cased (whichever the source has) |\n| `ALERT_SECRET_<NAME>` | from `alerting.env` on the host, so a token never has to be typed here, where every viewer can read it |\n\n**Examples**\n\nAny JSON webhook: `curl -fsS -m 10 -H 'Content-Type: application/json' -d \"$ALERT_JSON\" \"$ALERT_SECRET_WEBHOOK\"`\n\nSlack / Mattermost / Teams-style text: `jq -n --arg t \"[$ALERT_SEVERITY_NAME] $ALERT_TITLE\" '{text: $t}' | curl -fsS -m 10 -H 'Content-Type: application/json' -d @- \"$ALERT_SECRET_SLACK\"`\n\nntfy: `curl -fsS -m 10 -H \"Title: $ALERT_SOURCE_NAME\" -H \"Priority: $((6 - ALERT_SEVERITY))\" -d \"$ALERT_TITLE\" https://ntfy.sh/$ALERT_SECRET_NTFY_TOPIC`\n\nOnly critical ones to a pager, everything to chat: `[ \"$ALERT_SEVERITY\" = 1 ] && curl ... \"$ALERT_SECRET_PAGER\"; curl ... \"$ALERT_SECRET_CHAT\"`\n\nA non-zero exit is recorded as `failed` with the command's output in *Recent Alerts* -- `curl -f` makes an HTTP error count as one.\n"
+   }
+  }
+ ],
+ "refresh": "1m",
+ "schemaVersion": 39,
+ "tags": [
+  "alerting",
+  "security",
+  "tzsp-monitor"
+ ],
+ "templating": {
+  "list": [
+   {
+    "name": "site",
+    "type": "datasource",
+    "label": "Site",
+    "description": "Which tzsp-monitor instance the history panels read. The rules and commands are always this instance's: on another site they are shown empty and nothing here changes them.",
+    "query": "influxdb",
+    "regex": "",
+    "current": {
+     "selected": false,
+     "text": "InfluxDB_Flux",
+     "value": "InfluxDB_Flux"
+    },
+    "options": [],
+    "hide": 0,
+    "includeAll": false,
+    "multi": false,
+    "refresh": 1,
+    "skipUrlSync": false
+   },
+   {
+    "name": "command_for",
+    "type": "textbox",
+    "label": "Command for",
+    "description": "Which source the Command box is for (suricata, dns, arp, wids, scan, reputation, or default). Filled by clicking a command in Alert Rules.",
+    "query": "",
+    "current": {
+     "selected": false,
+     "text": "",
+     "value": ""
+    },
+    "options": [],
+    "hide": 0,
+    "skipUrlSync": false
+   },
+   {
+    "name": "command",
+    "type": "textbox",
+    "label": "Command",
+    "description": "The shell command for the source in Command for. Edit it here; the change is staged and applies only after Confirm in Pending Command Change. Empty it to clear the source's own command (it then uses the default).",
+    "query": "",
+    "current": {
+     "selected": false,
+     "text": "",
+     "value": ""
+    },
+    "options": [],
+    "hide": 0,
+    "skipUrlSync": false
+   },
+   {
+    "name": "enable",
+    "type": "textbox",
+    "label": "enable",
+    "description": "Set by a link in the tables; re-sent on every refresh, which is harmless.",
+    "query": "",
+    "current": {
+     "selected": false,
+     "text": "",
+     "value": ""
+    },
+    "options": [],
+    "hide": 2,
+    "skipUrlSync": false
+   },
+   {
+    "name": "disable",
+    "type": "textbox",
+    "label": "disable",
+    "description": "Set by a link in the tables; re-sent on every refresh, which is harmless.",
+    "query": "",
+    "current": {
+     "selected": false,
+     "text": "",
+     "value": ""
+    },
+    "options": [],
+    "hide": 2,
+    "skipUrlSync": false
+   },
+   {
+    "name": "severity",
+    "type": "textbox",
+    "label": "severity",
+    "description": "Set by a link in the tables; re-sent on every refresh, which is harmless.",
+    "query": "",
+    "current": {
+     "selected": false,
+     "text": "",
+     "value": ""
+    },
+    "options": [],
+    "hide": 2,
+    "skipUrlSync": false
+   },
+   {
+    "name": "confirm",
+    "type": "textbox",
+    "label": "confirm",
+    "description": "Set by a link in the tables; re-sent on every refresh, which is harmless.",
+    "query": "",
+    "current": {
+     "selected": false,
+     "text": "",
+     "value": ""
+    },
+    "options": [],
+    "hide": 2,
+    "skipUrlSync": false
+   },
+   {
+    "name": "cancel",
+    "type": "textbox",
+    "label": "cancel",
+    "description": "Set by a link in the tables; re-sent on every refresh, which is harmless.",
+    "query": "",
+    "current": {
+     "selected": false,
+     "text": "",
+     "value": ""
+    },
+    "options": [],
+    "hide": 2,
+    "skipUrlSync": false
+   },
+   {
+    "name": "test",
+    "type": "textbox",
+    "label": "test",
+    "description": "Set by a link in the tables; re-sent on every refresh, which is harmless.",
+    "query": "",
+    "current": {
+     "selected": false,
+     "text": "",
+     "value": ""
+    },
+    "options": [],
+    "hide": 2,
+    "skipUrlSync": false
+   }
+  ]
+ },
+ "time": {
+  "from": "now-24h",
+  "to": "now"
+ },
+ "timepicker": {},
+ "timezone": "browser",
+ "title": "Alerting",
+ "description": "Run a shell command -- a webhook, through curl -- when a detector finds something: Suricata, blocked DNS lookups, ARP watch, the wireless IDS, port scanners, IP reputation hits. Per source: on/off, the lowest severity that alerts, and the command. A control surface: the tables make the changes they show.",
+ "version": 1,
+ "weekStart": ""
+}

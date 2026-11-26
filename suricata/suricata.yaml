@@ -1,0 +1,250 @@
+%YAML 1.1
+---
+# Suricata config for the tzsp-monitor stack.
+#
+# Deliberately short: Suricata falls back to its compiled-in defaults for any
+# section that is absent, so only what actually differs from a stock install is
+# spelled out here. That keeps the file reviewable and survives image upgrades,
+# where a copied-and-edited 2000-line vendor config would drift.
+#
+# Two things here are not optional for this deployment:
+#   * the capture interface is the tap fed by tzsp-decap, never a real NIC --
+#     Suricata has no TZSP decoder, so sniffing the physical interface would see
+#     nothing but UDP/37008 datagrams;
+#   * every checksum check is off, because mirrored traffic is copied before the
+#     originating NIC computes its checksums. Left on, Suricata marks most of
+#     the stream invalid and silently stops inspecting it.
+
+vars:
+  # Overridden at startup from `suricata.home_net` in the property file (see
+  # entrypoint.sh) so "my networks" is defined in exactly one place.
+  address-groups:
+    HOME_NET: "[192.168.0.0/16,10.0.0.0/8,172.16.0.0/12]"
+    EXTERNAL_NET: "!$HOME_NET"
+    HTTP_SERVERS: "$HOME_NET"
+    SMTP_SERVERS: "$HOME_NET"
+    SQL_SERVERS: "$HOME_NET"
+    DNS_SERVERS: "$HOME_NET"
+    TELNET_SERVERS: "$HOME_NET"
+    AIM_SERVERS: "$EXTERNAL_NET"
+    DC_SERVERS: "$HOME_NET"
+    DNP3_SERVER: "$HOME_NET"
+    DNP3_CLIENT: "$HOME_NET"
+    MODBUS_CLIENT: "$HOME_NET"
+    MODBUS_SERVER: "$HOME_NET"
+    ENIP_CLIENT: "$HOME_NET"
+    ENIP_SERVER: "$HOME_NET"
+
+  # The full stock set. Emerging Threats rules reference these by name and a
+  # rule naming an undefined port-group fails to load, so none can be dropped.
+  port-groups:
+    HTTP_PORTS: "80"
+    SHELLCODE_PORTS: "!80"
+    ORACLE_PORTS: 1521
+    SSH_PORTS: 22
+    DNP3_PORTS: 20000
+    MODBUS_PORTS: 502
+    FILE_DATA_PORTS: "[$HTTP_PORTS,110,143]"
+    FTP_PORTS: 21
+    GENEVE_PORTS: 6081
+    VXLAN_PORTS: 4789
+    TEREDO_PORTS: 3544
+    SIP_PORTS: "[5060, 5061]"
+
+default-log-dir: /var/log/suricata/
+
+# Suricata's own counters. The mikrotik-responder forwards these to InfluxDB so
+# the dashboard can show whether the engine is alive and whether it is dropping
+# packets -- an IDS that quietly drops 40% of the mirror still looks healthy.
+#
+# This interval is also the biggest single writer into eve.json on a quiet
+# network: a stats record is ~9 KB, and 99.7% of the 105 MB measured here was
+# stats, not alerts. Doubling it halves that at the cost of the pipeline-health
+# panels' resolution; 30s is kept because those panels are how a capture loss
+# gets noticed, and disk-guard bounds the file either way.
+stats:
+  enabled: yes
+  interval: 30
+
+outputs:
+  # eve.json is the only output that matters here: mikrotik-responder tails it.
+  # A file rather than a unix socket on purpose -- alerts survive a responder
+  # restart and can be replayed or grepped by hand.
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: eve.json
+      # Measured inert, and left in only because a later version honouring it
+      # would do no harm: Suricata 8.0.6 parses this key -- `conf-get
+      # outputs.0.eve-log.rotate-interval` answers "day" -- but never rolls the
+      # file over. One eve.json here held 14 days and 105 MB with this set.
+      # Even where it works, a daily rollover bounds nothing *inside* a day.
+      # What actually keeps this file off the disk ceiling is disk-guard: it
+      # renames the file at disk_guard.eve_max_bytes and asks for
+      # `reopen-log-files` on the command socket below, then prunes the
+      # rotations oldest-first against a byte budget.
+      rotate-interval: day
+      pcap-file: false
+      community-id: true
+      types:
+        - alert:
+            payload: yes
+            payload-buffer-size: 4kb
+            payload-printable: yes
+            packet: no
+            # Pulls the app-layer context (HTTP host/URL, TLS SNI, DNS query)
+            # into the alert record; the dashboard shows it in the detail table.
+            metadata: yes
+            http-body: no
+            tagged-packets: no
+        - stats:
+            totals: yes
+            threads: no
+            deltas: no
+        # Everything below would turn eve.json into a full flow log. On the
+        # production mirror (~200k flows/hour) that is gigabytes a day for data
+        # the collector already stores in InfluxDB.
+        - anomaly:
+            enabled: no
+        - http:
+            enabled: no
+        - dns:
+            enabled: no
+        - tls:
+            enabled: no
+        - flow:
+            enabled: no
+
+  # DNS, and only DNS, to a unix socket that dns-monitor listens on.
+  #
+  # A second eve output rather than another `types:` entry above, and a socket
+  # rather than a file, for one reason: volume. An alert is evidence and has to
+  # survive a restart, which is why eve.json is a file. DNS is telemetry -- on
+  # the production mirror it is on the order of gigabytes a day, some five
+  # hundred times what eve.json holds -- and losing a minute of it while
+  # dns-monitor restarts costs nothing, whereas writing it to the log volume
+  # would push the alert history off the disk within the hour. Nothing on this
+  # path touches a disk, so disk-guard has nothing to bound here.
+  #
+  # Measured on 8.0.6, and why `suricata` needs no depends_on for this:
+  #   * with no listener at start the output logs "will keep trying", the
+  #     engine starts normally, and it connects on the first DNS event after
+  #     dns-monitor binds the socket;
+  #   * if dns-monitor goes away it logs "Broken pipe; reconnecting..." and
+  #     reattaches by itself.
+  # So a `docker compose up -d --build dns-monitor` never disturbs the capture.
+  #
+  # Responses only: the response record carries the query name *and* the
+  # answer, so logging requests as well would double the stream to learn
+  # nothing. Note the consequence in dns-monitor -- in a response the client is
+  # dest_ip, and src_ip is the resolver.
+  - eve-log:
+      enabled: yes
+      filetype: unix_stream
+      filename: /var/lib/suricata-dns/dns.socket
+      types:
+        - dns:
+            enabled: yes
+            # version 3 groups a transaction's queries and answers into one
+            # record; version 2 emits one event per answer RR, which for the
+            # adlist case means the query name and the 0.0.0.0 arrive apart.
+            version: 3
+            requests: no
+            responses: yes
+            formats: [detailed]
+
+  - fast:
+      enabled: no
+  - stats:
+      enabled: no
+
+logging:
+  default-log-level: info
+  outputs:
+    - console:
+        enabled: yes
+    - file:
+        enabled: yes
+        filename: /var/log/suricata/suricata.log
+
+af-packet:
+  - interface: tzsp0
+    # Two threads is plenty for one tap queue and leaves CPU for the collector,
+    # which is the heavier consumer on the same host. Raise on a busy mirror.
+    threads: 2
+    cluster-id: 98
+    cluster-type: cluster_flow
+    defrag: yes
+    use-mmap: yes
+    tpacket-v3: yes
+    ring-size: 8192
+    block-size: 262144
+    # See the header comment: mirrored traffic has pre-offload checksums.
+    checksum-checks: no
+
+# A mirror is a bystander: never try to infer that we are one of the endpoints.
+host-mode: sniffer-only
+runmode: workers
+
+stream:
+  memcap: 256mb
+  checksum-validation: no
+  inline: no
+  reassembly:
+    memcap: 512mb
+    depth: 1mb
+
+flow:
+  memcap: 256mb
+  hash-size: 262144
+  prealloc: 10000
+
+defrag:
+  memcap: 64mb
+
+# Merged into the built-in protocol defaults, not a replacement for them.
+app-layer:
+  protocols:
+    # Off by default in stock Suricata but common on a LAN mirror, and cheap.
+    telnet:
+      enabled: yes
+    # These two are off by default, which makes the 16 app-layer-event rules
+    # Emerging Threats ships for them fail to load -- 32 error lines at every
+    # start, which is exactly how a real error gets overlooked. Enabling the
+    # parsers costs nothing on a network with no ICS equipment on these ports.
+    modbus:
+      enabled: yes
+      detection-ports:
+        dp: 502
+    dnp3:
+      enabled: yes
+      detection-ports:
+        dp: 20000
+
+detect:
+  profile: medium
+
+# The control channel the rule-control service uses to apply a rule change
+# without restarting the engine (a restart would lose every tracked flow and
+# leave a gap in the capture). The socket is a filesystem object, so it lives in
+# the shared `suricata-control` volume rather than anywhere network-visible;
+# reaching it means having that volume mounted, which only rule-control does.
+unix-command:
+  enabled: yes
+  filename: /var/lib/suricata-control/suricata-command.socket
+
+default-rule-path: /var/lib/suricata/rules
+rule-files:
+  # Written by suricata-update at container start (Emerging Threats Open).
+  - suricata.rules
+  # Ours: the pipeline self-test signature, plus room for site-specific rules.
+  # Path follows the single directory bind mount (./suricata -> /etc/suricata/tzsp).
+  - /etc/suricata/tzsp/rules/local.rules
+
+classification-file: /etc/suricata/classification.config
+reference-config-file: /etc/suricata/reference.config
+# On the shared volume, not in /etc/suricata, because rule-control rewrites it:
+# a `suppress` line here is how a rule gets disabled from the Grafana UI. It is
+# re-read on every ruleset reload (threshold parsing happens inside
+# SigLoadSignatures), which is what makes the change take effect immediately.
+threshold-file: /var/lib/suricata-control/threshold.config

@@ -1,0 +1,32 @@
+# Site-local Suricata rules for tzsp-monitor.
+#
+# Loaded after the Emerging Threats set, so anything here can also be used to
+# suppress or complement it. Keep sids in the 9000000+ range: that block is
+# reserved for local use and can never collide with a downloaded ruleset.
+
+# Pipeline self-test. Fired by tzsp-decap/selftest.py, which is the only thing
+# on a normal network that sends this string, so it is a safe "is the whole path
+# from mirror to dashboard alive?" probe.
+#
+# priority:4 => alert severity 4, which sits below the responder's default
+# block.max_severity of 2. Running the self-test therefore shows up on the
+# dashboard but never puts anything on the router's address list.
+alert ip any any -> any any ( \
+    msg:"TZSP-MONITOR pipeline self-test"; \
+    content:"TZSPMONITORSELFTEST"; \
+    classtype:not-suspicious; \
+    priority:4; \
+    sid:9000001; rev:1;)
+
+# Examples worth enabling once you know your own network -- left commented
+# because either one is noisy on a network it was not measured against.
+#
+# Cleartext admin protocol crossing the perimeter:
+# alert tcp $HOME_NET any -> $EXTERNAL_NET 23 ( \
+#     msg:"TZSP-MONITOR outbound telnet"; flow:to_server,established; \
+#     classtype:policy-violation; priority:2; sid:9000002; rev:1;)
+#
+# SMB leaving the site (should never happen on a routed network):
+# alert tcp $HOME_NET any -> $EXTERNAL_NET 445 ( \
+#     msg:"TZSP-MONITOR outbound SMB"; flow:to_server,established; \
+#     classtype:policy-violation; priority:2; sid:9000003; rev:1;)

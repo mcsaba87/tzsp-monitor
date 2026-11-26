@@ -1,0 +1,2298 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "uid": "wireless-ids",
+  "links": [],
+  "liveNow": true,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Wireless IDS",
+  "description": "Rogue and evil-twin APs, spoofing, deauth/auth/beacon floods, KARMA and handshake harvesting, read from raw 802.11 frames a radio in sniffer mode streams as TZSP to UDP 37008, from where tzsp-decap passes the 802.11 on to the wids service. Payloads are encrypted, so this is the management layer and the frame headers, not signature inspection. Alerts only -- nothing here writes to the router.",
+  "tags": [
+    "wireless",
+    "wids",
+    "security",
+    "tzsp-monitor"
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "version": 1,
+  "weekStart": "",
+  "panels": [
+    {
+      "type": "stat",
+      "id": 1,
+      "title": "Wireless IDS",
+      "description": "Whether this dashboard's data is being collected at all, computed by the wids service from what it actually received. WATCHING: 802.11 frames are arriving and wids.our_ssids plus wids.authorized_bssids are set, so every detection can fire. INVENTORY ONLY: frames arrive, but until SSIDs are marked as ours and BSSIDs authorized (Policy, at the bottom) there is nothing to call an evil twin -- APs on your SSIDs read UNVERIFIED and are listed below so the list can be filled in. NOT 802.11: datagrams reach the wids service but none is an 802.11 frame -- something is sending Ethernet TZSP to it directly instead of to 37008. NO STREAM: nothing for wids.silent_seconds -- check that the sensor streams to this host (port 37008), the host firewall, and the '802.11 to wids' count in the tzsp-decap log. NOT RUNNING is the -1 sentinel, so a stopped service is not a blank tile.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\nseen = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"wids\" and r._field == \"state_code\")\n  |> last()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, array.from(rows: [{_value: -1}])])\n  |> group()\n  |> max()\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "NOT RUNNING",
+                  "color": "#d03b3b",
+                  "index": 0
+                },
+                "0": {
+                  "text": "NO STREAM",
+                  "color": "#ec835a",
+                  "index": 1
+                },
+                "1": {
+                  "text": "NOT 802.11",
+                  "color": "#fab219",
+                  "index": 2
+                },
+                "2": {
+                  "text": "INVENTORY ONLY",
+                  "color": "#fab219",
+                  "index": 3
+                },
+                "3": {
+                  "text": "WATCHING",
+                  "color": "#0ca30c",
+                  "index": 4
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 38
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 2,
+      "title": "Critical & High",
+      "description": "Wireless alerts of severity 1 or 2 in range: evil twins, BSSID spoofing, KARMA, clients on an evil twin, deauth/auth/beacon floods, handshake harvesting, and your SSID offered below wids.min_security. The count is events, not rows -- a sustained attack is one row per wids.alert_repeat_seconds carrying everything since the previous one.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\nseen = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"wids_alert\" and r._field == \"count\")\n  |> filter(fn: (r) => r.severity =~ /^[12]$/)\n  |> sum()\n  |> group()\n  |> sum()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> sum()\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "NONE",
+                  "color": "#0ca30c",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#d03b3b",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 38
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 3,
+      "title": "Evil Twins",
+      "description": "Distinct BSSIDs in range advertising one of wids.our_ssids without being in wids.authorized_bssids. Always NONE while the authorized list is empty -- see UNVERIFIED next to it, and the Wireless IDS tile.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\nseen = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"wids_ap\" and r._field == \"beacons\")\n  |> filter(fn: (r) => r.class == \"evil_twin\")\n  // last() per series pushes down; distinct BSSIDs are then counted on the\n  // handful of rows left. A BSSID whose class or SSID changed in range is\n  // still one BSSID.\n  |> last()\n  |> group()\n  |> distinct(column: \"bssid\")\n  |> count()\n\nunion(tables: [seen, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> sum()\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "NONE",
+                  "color": "#0ca30c",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#d03b3b",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 38
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 4,
+      "title": "Unverified on Our SSIDs",
+      "description": "Distinct BSSIDs carrying one of wids.our_ssids while wids.authorized_bssids is empty, so there is nothing to judge them against. Filter the inventory below on class `unverified`, check each one is really yours, and put them in wids.authorized_bssids (a prefix ending in * covers an AP's whole run of BSSIDs). From then on any newcomer is an evil twin.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\nseen = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"wids_ap\" and r._field == \"beacons\")\n  |> filter(fn: (r) => r.class == \"unverified\")\n  // last() per series pushes down; distinct BSSIDs are then counted on the\n  // handful of rows left. A BSSID whose class or SSID changed in range is\n  // still one BSSID.\n  |> last()\n  |> group()\n  |> distinct(column: \"bssid\")\n  |> count()\n\nunion(tables: [seen, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> sum()\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "NONE",
+                  "color": "#0ca30c",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#fab219",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 38
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 5,
+      "title": "Access Points Heard",
+      "description": "Distinct BSSIDs in range, ours and everyone else's. A sensor hears one channel at a time, so this is what was audible on the channels it listened to, not a site survey.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\nseen = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"wids_ap\" and r._field == \"beacons\")\n  \n  // last() per series pushes down; distinct BSSIDs are then counted on the\n  // handful of rows left. A BSSID whose class or SSID changed in range is\n  // still one BSSID.\n  |> last()\n  |> group()\n  |> distinct(column: \"bssid\")\n  |> count()\n\nunion(tables: [seen, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> sum()\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3b82f6",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 38
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 6,
+      "title": "Sensor UDP Drops",
+      "description": "Datagrams the kernel dropped on wids' UDP socket in range, from /proc/net/udp. A climbing number means frames -- and the attacks in them -- were never inspected, and nothing else would say so. NO DATA is the -1 sentinel for a service that wrote nothing.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\nseen = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"wids\" and r._field == \"udp_drops\")\n  |> sum()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, array.from(rows: [{_value: -1}])])\n  |> group()\n  |> max()\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "NO DATA",
+                  "color": "#9ca3af",
+                  "index": 0
+                },
+                "0": {
+                  "text": "NONE",
+                  "color": "#0ca30c",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#d03b3b",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 38
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 7,
+      "title": "Wireless Alerts over Time by Severity",
+      "description": "Alert events per bucket, stacked by severity. Bars are labelled with the START of their window (timeSrc _start), so zooming onto one selects the alerts that drew it. Severity colours are the Suricata dashboard's, pinned per series with overrides.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "// Derived from the time range, like the Suricata dashboard: ~96 buckets\n// however far you zoom, floored at the service's 60s window, below which\n// there is nothing finer to show.\nspanNs = int(v: v.timeRangeStop) - int(v: v.timeRangeStart)\neveryNs = if spanNs / 96 < 60000000000 then 60000000000 else spanNs / 96\nevery = duration(v: everyNs)\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"wids_alert\" and r._field == \"count\")\n  |> aggregateWindow(every: every, fn: sum, timeSrc: \"_start\", createEmpty: false)\n  |> group(columns: [\"severity\", \"severity_name\"])\n  |> aggregateWindow(every: every, fn: sum, timeSrc: \"_start\", createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"severity_name\"])\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "gradientMode": "none",
+            "barAlignment": 1,
+            "showPoints": "never",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*critical.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d03b3b"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "1 - critical"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*high.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#ec835a"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "2 - high"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*medium.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#e3c93c"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "3 - medium"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*info.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3b82f6"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "4 - informational"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "table",
+      "id": 8,
+      "title": "Recent Wireless Alerts",
+      "description": "Newest first, 200 rows. One row per (alert, BSSID) per wids.alert_repeat_seconds (policy findings: per hour); Count is every event since the previous row of the same pair. Source is the transmitter address as it appeared on the air -- in 802.11 that is forgeable by anyone with a radio, which is why nothing here is ever pushed to the router.",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"wids_alert\")\n  // Alerts are throttled at the source, so the pivot runs on a few hundred\n  // rows at most -- it is the one non-pushdown step here.\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> group()\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 200)\n  |> keep(columns: [\"_time\", \"severity\", \"alert\", \"bssid\", \"ssid\", \"source\", \"count\", \"detail\"])\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Severity"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "1": {
+                        "text": "critical",
+                        "color": "#d03b3b",
+                        "index": 0
+                      },
+                      "2": {
+                        "text": "high",
+                        "color": "#ec835a",
+                        "index": 1
+                      },
+                      "3": {
+                        "text": "medium",
+                        "color": "#e3c93c",
+                        "index": 2
+                      },
+                      "4": {
+                        "text": "info",
+                        "color": "#3b82f6",
+                        "index": 3
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Alert"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "evil_twin": {
+                        "text": "Evil twin",
+                        "index": 0
+                      },
+                      "security_downgrade": {
+                        "text": "Security downgrade",
+                        "index": 1
+                      },
+                      "bssid_spoof": {
+                        "text": "BSSID spoofed",
+                        "index": 2
+                      },
+                      "karma": {
+                        "text": "KARMA / MANA AP",
+                        "index": 3
+                      },
+                      "client_on_evil_twin": {
+                        "text": "Client on evil twin",
+                        "index": 4
+                      },
+                      "deauth_flood": {
+                        "text": "Deauth flood",
+                        "index": 5
+                      },
+                      "auth_flood": {
+                        "text": "Auth flood",
+                        "index": 6
+                      },
+                      "beacon_flood": {
+                        "text": "Beacon flood",
+                        "index": 7
+                      },
+                      "eapol_harvest": {
+                        "text": "Handshake harvesting",
+                        "index": 8
+                      },
+                      "m3_retransmit": {
+                        "text": "M3 retransmits (KRACK?)",
+                        "index": 9
+                      },
+                      "nav_abuse": {
+                        "text": "NAV abuse (virtual jamming)",
+                        "index": 10
+                      },
+                      "adhoc_network": {
+                        "text": "Ad-hoc network",
+                        "index": 11
+                      },
+                      "client_on_foreign_ap": {
+                        "text": "Our client on foreign AP",
+                        "index": 12
+                      },
+                      "weak_cipher": {
+                        "text": "TKIP offered",
+                        "index": 13
+                      },
+                      "wps_enabled": {
+                        "text": "WPS enabled",
+                        "index": 14
+                      },
+                      "pmf_not_required": {
+                        "text": "PMF not required",
+                        "index": 15
+                      },
+                      "eap_identity_cleartext": {
+                        "text": "EAP identity in clear",
+                        "index": 16
+                      },
+                      "probe_flood": {
+                        "text": "Probe flood",
+                        "index": 17
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.width",
+                "value": 200
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Count"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Time",
+            "desc": true
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "_time": 0,
+              "severity": 1,
+              "alert": 2,
+              "ssid": 3,
+              "bssid": 4,
+              "source": 5,
+              "count": 6,
+              "detail": 7
+            },
+            "renameByName": {
+              "_time": "Time",
+              "severity": "Severity",
+              "alert": "Alert",
+              "ssid": "SSID",
+              "bssid": "BSSID",
+              "source": "Source",
+              "count": "Count",
+              "detail": "Detail"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 9,
+      "title": "Access Point Inventory",
+      "description": "Every BSSID heard in range: evil twins first, then unverified, ad-hoc, ours, and the neighbours by how often they were heard. RSSI is the sensor's last per-window mean (blank if the sensor sends no RSSI tag). PMF: off / optional / REQUIRED -- without it clients obey forged deauths. First seen is when this service first heard the BSSID at all (kept for wids.known_ap_days), so a new AP on a quiet floor stands out. A BSSID whose class or SSID changed in range appears once per combination. Click an SSID to mark it as ours, a BSSID to authorize it: both land in Our Networks at the bottom and apply within one window.",
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "base = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"wids_ap\")\n\ncols = [\"bssid\", \"ssid\", \"security\", \"class\", \"_field\", \"_value\"]\n\n// Every reduction below is a pushdown aggregate per series; toFloat() makes\n// the int and float fields one type so they can share a pivot.\nsums = base\n  |> filter(fn: (r) => r._field == \"beacons\" or r._field == \"probe_resps\")\n  |> sum()\n  |> toFloat()\n  |> keep(columns: cols)\nlasts = base\n  |> filter(fn: (r) => r._field == \"channel\" or r._field == \"rssi\" or r._field == \"pmf\"\n      or r._field == \"wps\" or r._field == \"tkip\" or r._field == \"hidden\"\n      or r._field == \"clients\")\n  |> last()\n  |> toFloat()\n  |> keep(columns: cols)\nfirsts = base\n  |> filter(fn: (r) => r._field == \"first_seen\")\n  |> last()\n  |> map(fn: (r) => ({r with _value: float(v: r._value) * 1000.0}))\n  |> keep(columns: cols)\nseen = base\n  |> filter(fn: (r) => r._field == \"beacons\")\n  |> last()\n  |> map(fn: (r) => ({r with _field: \"last_seen\", _value: float(v: int(v: r._time)) / 1000000.0}))\n  |> keep(columns: cols)\n\nunion(tables: [sums, lasts, firsts, seen])\n  |> group()\n  |> pivot(rowKey: [\"bssid\", \"ssid\", \"security\", \"class\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({r with rank:\n      if r.class == \"evil_twin\" then 5\n      else if r.class == \"unverified\" then 4\n      else if r.class == \"adhoc\" then 3\n      else if r.class == \"authorized\" then 2\n      else if r.class == \"direct\" then 1\n      else 0}))\n  |> sort(columns: [\"rank\", \"beacons\"], desc: true)\n  |> limit(n: 500)\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Class"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "evil_twin": {
+                        "text": "EVIL TWIN",
+                        "color": "#d03b3b",
+                        "index": 0
+                      },
+                      "unverified": {
+                        "text": "UNVERIFIED",
+                        "color": "#fab219",
+                        "index": 1
+                      },
+                      "adhoc": {
+                        "text": "AD-HOC",
+                        "color": "#ec835a",
+                        "index": 2
+                      },
+                      "authorized": {
+                        "text": "OURS",
+                        "color": "#0ca30c",
+                        "index": 3
+                      },
+                      "direct": {
+                        "text": "WI-FI DIRECT",
+                        "color": "#9ca3af",
+                        "index": 4
+                      },
+                      "neighbor": {
+                        "text": "neighbour",
+                        "color": "#9ca3af",
+                        "index": 5
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "RSSI"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dBm"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "PMF"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "off",
+                        "color": "#9ca3af",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "optional",
+                        "color": "#9ca3af",
+                        "index": 1
+                      },
+                      "2": {
+                        "text": "REQUIRED",
+                        "color": "#0ca30c",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "WPS"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "no",
+                        "color": "#9ca3af",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "YES",
+                        "color": "#ec835a",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "TKIP"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "no",
+                        "color": "#9ca3af",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "YES",
+                        "color": "#ec835a",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Hidden"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "no",
+                        "color": "#9ca3af",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "hidden",
+                        "color": "#9ca3af",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^(First|Last) seen$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Security"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "open": {
+                        "text": "open",
+                        "color": "#ec835a",
+                        "index": 0
+                      },
+                      "wep": {
+                        "text": "wep",
+                        "color": "#ec835a",
+                        "index": 1
+                      },
+                      "wpa": {
+                        "text": "wpa",
+                        "color": "#fab219",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "SSID"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Mark this SSID as ours",
+                    "targetBlank": false,
+                    "url": "/d/wireless-ids?${__url_time_range}&${site:queryparam}&var-remove_ssid=&var-add_bssid=&var-remove_bssid=&var-add_ssid=${__value.raw:percentencode}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "BSSID"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Authorize this BSSID",
+                    "targetBlank": false,
+                    "url": "/d/wireless-ids?${__url_time_range}&${site:queryparam}&var-add_ssid=&var-remove_ssid=&var-remove_bssid=&var-add_bssid=${__value.raw:percentencode}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "rank": true
+            },
+            "indexByName": {
+              "class": 0,
+              "ssid": 1,
+              "bssid": 2,
+              "security": 3,
+              "channel": 4,
+              "rssi": 5,
+              "beacons": 6,
+              "probe_resps": 7,
+              "clients": 8,
+              "pmf": 9,
+              "wps": 10,
+              "tkip": 11,
+              "hidden": 12,
+              "first_seen": 13,
+              "last_seen": 14
+            },
+            "renameByName": {
+              "class": "Class",
+              "ssid": "SSID",
+              "bssid": "BSSID",
+              "security": "Security",
+              "channel": "Channel",
+              "rssi": "RSSI",
+              "beacons": "Beacons",
+              "probe_resps": "Probe resp.",
+              "clients": "Clients",
+              "pmf": "PMF",
+              "wps": "WPS",
+              "tkip": "TKIP",
+              "hidden": "Hidden",
+              "first_seen": "First seen",
+              "last_seen": "Last seen"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "barchart",
+      "id": 10,
+      "title": "Networks Your Clients Ask For (directed probes)",
+      "description": "SSIDs named in directed probe requests -- the networks nearby devices have joined before and are calling out for: homes, hotels, previous employers. A KARMA/MANA AP answers exactly these, so a corporate device probing for an open hotel SSID is one that can be lured. Recorded per SSID, never per device (wids.record_probes). `(capped)` is the overflow past wids.max_probe_ssids per window.",
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 35
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"wids_probe\" and r._field == \"count\")\n  |> group(columns: [\"ssid\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 20)\n  |> keep(columns: [\"ssid\", \"_value\"])\n  |> rename(columns: {_value: \"probes\"})\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3b82f6"
+          },
+          "unit": "short",
+          "decimals": 0,
+          "custom": {
+            "fillOpacity": 85,
+            "lineWidth": 0
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xField": "ssid",
+        "showValue": "auto",
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        },
+        "barWidth": 0.8,
+        "groupWidth": 0.7
+      }
+    },
+    {
+      "type": "table",
+      "id": 11,
+      "title": "What Each Sensor Hears, by Channel",
+      "description": "Per sensor and channel (from the TZSP channel tag; `unknown` when the sensor does not send one). Retry % is the share of frames with the retry bit -- high values are congestion or interference, the one RF symptom visible in frames (raw RF jamming is not: it only shows as frames disappearing). A channel missing here was never listened to, so nothing on it could have been detected.",
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 35
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"wids_channel\")\n  |> filter(fn: (r) => r._field == \"frames\" or r._field == \"retries\" or r._field == \"mgmt\"\n      or r._field == \"data\" or r._field == \"bytes\")\n  |> sum()\n  |> group()\n  |> pivot(rowKey: [\"sensor\", \"channel\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({r with retry_pct:\n      if r.frames > 0 then float(v: r.retries) * 100.0 / float(v: r.frames) else 0.0}))\n  |> sort(columns: [\"frames\"], desc: true)\n  |> keep(columns: [\"sensor\", \"channel\", \"frames\", \"mgmt\", \"data\", \"retry_pct\", \"bytes\"])\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Retry %"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#0ca30c",
+                      "value": null
+                    },
+                    {
+                      "color": "#fab219",
+                      "value": 15
+                    },
+                    {
+                      "color": "#d03b3b",
+                      "value": 30
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Bytes"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^(Frames|Mgmt|Data)$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "sensor": 0,
+              "channel": 1,
+              "frames": 2,
+              "mgmt": 3,
+              "data": 4,
+              "retry_pct": 5,
+              "bytes": 6
+            },
+            "renameByName": {
+              "sensor": "Sensor",
+              "channel": "Channel",
+              "frames": "Frames",
+              "mgmt": "Mgmt",
+              "data": "Data",
+              "retry_pct": "Retry %",
+              "bytes": "Bytes"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 12,
+      "title": "Sensor Feed",
+      "description": "What tzsp-decap passed on to the wids service and what became of it, per bucket. Frames is what was inspected. FCS errors are frames the sensor flagged as corrupt and that were dropped on purpose (one flipped bit in a BSSID would be a new rogue AP). Wrong encap is TZSP that is not 802.11 -- Ethernet TZSP sent to the wids service directly instead of to 37008 (tzsp-decap only forwards 802.11). UDP drops are frames the kernel discarded before anyone saw them.",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "// Derived from the time range, like the Suricata dashboard: ~96 buckets\n// however far you zoom, floored at the service's 60s window, below which\n// there is nothing finer to show.\nspanNs = int(v: v.timeRangeStop) - int(v: v.timeRangeStart)\neveryNs = if spanNs / 96 < 60000000000 then 60000000000 else spanNs / 96\nevery = duration(v: everyNs)\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"wids\")\n  |> filter(fn: (r) => r._field == \"frames\" or r._field == \"fcs_errors\"\n      or r._field == \"wrong_encap\" or r._field == \"udp_drops\" or r._field == \"malformed\")\n  |> aggregateWindow(every: every, fn: sum, timeSrc: \"_start\", createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*frames.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3b82f6"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "frames"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*fcs_errors.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9ca3af"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "FCS errors"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*wrong_encap.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#fab219"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "wrong encap"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*udp_drops.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d03b3b"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "UDP drops"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*malformed.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9b59d0"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "malformed"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "table",
+      "id": 13,
+      "title": "Sensor Health",
+      "description": "One row per sensor the wids service has ever heard (and every address in wids.sensors, heard or not), written every window -- a silent sensor stays in the table as SILENT instead of quietly disappearing. The Wireless IDS tile only says whether anything at all arrives; with two sensors, one dead is half the air unwatched and that tile still reads WATCHING. SILENT means nothing for wids.sensor_silent_seconds (300) and raises a sensor_silent alert (high, repeated hourly). Last heard is at the end of the range. Channels are the ones actually heard on in the range: a channel not listed was not watched, so nothing on it could have been detected. A sensor silent for wids.sensor_forget_days (7) is dropped.",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 52
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "base = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"wids_sensor\")\n\nframes = base |> filter(fn: (r) => r._field == \"frames\") |> sum()\nlatest = base\n  |> filter(fn: (r) => r._field == \"silent\" or r._field == \"last_seen_age\" or r._field == \"channels\")\n  |> last()\n\nnums = union(tables: [frames, latest])\n  |> toFloat()\n  |> group()\n  |> pivot(rowKey: [\"sensor\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n\nchans = base\n  |> filter(fn: (r) => r._field == \"channel_list\")\n  |> last()\n  |> group()\n  |> keep(columns: [\"sensor\", \"_value\"])\n  |> rename(columns: {_value: \"channel_list\"})\n\njoin(tables: {a: nums, b: chans}, on: [\"sensor\"])\n  |> sort(columns: [\"silent\", \"frames\"], desc: true)\n  |> keep(columns: [\"sensor\", \"silent\", \"last_seen_age\", \"frames\", \"channels\", \"channel_list\"])\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "State"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "HEARING",
+                        "color": "#0ca30c",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "SILENT",
+                        "color": "#d03b3b",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last heard"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^(Frames|Channels)$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "sensor": 0,
+              "silent": 1,
+              "last_seen_age": 2,
+              "frames": 3,
+              "channels": 4,
+              "channel_list": 5
+            },
+            "renameByName": {
+              "sensor": "Sensor",
+              "silent": "State",
+              "last_seen_age": "Last heard",
+              "frames": "Frames",
+              "channels": "Channels",
+              "channel_list": "Heard on"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 14,
+      "title": "Policy",
+      "description": "What wids knows about which networks are yours. COMPLETE: SSIDs marked as ours and BSSIDs authorized, so every detection can fire -- an AP on our SSID that is not authorized is an EVIL TWIN. SSIDS ONLY: our SSIDs are known but no BSSID is authorized yet, so APs on them read UNVERIFIED instead of evil twin: authorize ours from the Access Point Inventory (click a BSSID). NOTHING SET: every AP is a neighbour; click an SSID in the inventory to mark it as ours. Changes apply within one window, no restart.",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 59
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://wids:8060/status?site=${site}",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "level",
+              "text": "level",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "OTHER SITE",
+                  "color": "#9ca3af",
+                  "index": 0
+                },
+                "0": {
+                  "text": "NOTHING SET",
+                  "color": "#ec835a",
+                  "index": 1
+                },
+                "1": {
+                  "text": "SSIDS ONLY",
+                  "color": "#fab219",
+                  "index": 2
+                },
+                "2": {
+                  "text": "COMPLETE",
+                  "color": "#0ca30c",
+                  "index": 3
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 32
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 15,
+      "title": "Policy Control",
+      "description": "ENABLED: the boxes and links below change the lists. READ-ONLY: wids.control_enabled = false in suricata.properties. OTHER SITE: the Site box points at another instance; controls only ever act on this one. Anyone who can view this dashboard can change the lists -- the Infinity datasource calls wids with its own identity, not the viewer's; every change is audited in wids_policy_control.",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 59
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://wids:8060/status?site=${site}",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "control_enabled",
+              "text": "control_enabled",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "READ-ONLY",
+                  "color": "#fab219",
+                  "index": 0
+                },
+                "1": {
+                  "text": "ENABLED",
+                  "color": "#0ca30c",
+                  "index": 1
+                },
+                "2": {
+                  "text": "OTHER SITE",
+                  "color": "#9ca3af",
+                  "index": 2
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 32
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 16,
+      "title": "Last Policy Change",
+      "description": "The last change made through the boxes or links since wids started, or why the last attempt was refused (a malformed BSSID, a full list, read-only).",
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 12,
+        "y": 59
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://wids:8060/status?site=${site}",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "message",
+              "text": "message",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 18
+        }
+      }
+    },
+    {
+      "type": "table",
+      "id": 17,
+      "title": "Our Networks -- click a value to remove it",
+      "description": "The SSIDs that are ours and the BSSIDs allowed to carry them, as wids uses them right now. Add from the Access Point Inventory (click an SSID to mark it ours, a BSSID to authorize it) or type into the boxes at the top. A BSSID may be a prefix ending in * covering at least the OUI (aa:bb:cc:*), since one AP owns a run of BSSIDs. The boxes stay filled and are re-sent on every refresh, which is harmless: wids only changes anything when a list would actually change. This panel is the one that sends them, so it always shows the state after the change.",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 64
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://wids:8060/apply?add_ssid=${add_ssid:percentencode}&remove_ssid=${remove_ssid:percentencode}&add_bssid=${add_bssid:percentencode}&remove_bssid=${remove_bssid:percentencode}&site=${site}",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "kind",
+              "text": "kind",
+              "type": "string"
+            },
+            {
+              "selector": "value",
+              "text": "value",
+              "type": "string"
+            },
+            {
+              "selector": "since",
+              "text": "since",
+              "type": "string"
+            },
+            {
+              "selector": "note",
+              "text": "note",
+              "type": "string"
+            },
+            {
+              "selector": "ssid",
+              "text": "ssid",
+              "type": "string"
+            },
+            {
+              "selector": "bssid",
+              "text": "bssid",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Remove from our networks",
+                    "targetBlank": false,
+                    "url": "/d/wireless-ids?${__url_time_range}&${site:queryparam}&var-add_ssid=&var-add_bssid=&var-remove_ssid=${__data.fields.ssid:percentencode}&var-remove_bssid=${__data.fields.bssid:percentencode}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^(ssid|bssid)$"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "kind": 0,
+              "value": 1,
+              "since": 2,
+              "note": 3,
+              "ssid": 4,
+              "bssid": 5
+            },
+            "renameByName": {
+              "kind": "Kind",
+              "value": "Value",
+              "since": "Since (UTC)",
+              "note": "Note"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "site",
+        "type": "datasource",
+        "label": "Site",
+        "description": "Which tzsp-monitor instance these panels read. Remote sites are the REMOTE_SITE_* lines in properties.yml of the instance serving this Grafana; each is a datasource pointed at that site's own InfluxDB, so nothing is copied between sites. This dashboard has no controls, so nothing here acts on any site.",
+        "query": "influxdb",
+        "regex": "",
+        "current": {
+          "selected": false,
+          "text": "InfluxDB_Flux",
+          "value": "InfluxDB_Flux"
+        },
+        "options": [],
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1,
+        "skipUrlSync": false
+      },
+      {
+        "name": "add_ssid",
+        "type": "textbox",
+        "label": "Add our SSID",
+        "description": "Mark an SSID as ours. Normally filled by clicking an SSID in the Access Point Inventory. Re-sent on every refresh, which is harmless: wids only acts when the list would change.",
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "remove_ssid",
+        "type": "textbox",
+        "label": "Remove SSID",
+        "description": "Stop treating an SSID as ours. Normally filled by clicking it in Our Networks.",
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "add_bssid",
+        "type": "textbox",
+        "label": "Authorize BSSID",
+        "description": "Allow a transmitter to carry our SSIDs: aa:bb:cc:dd:ee:ff, or a prefix of at least the OUI ending in * (aa:bb:cc:*). Normally filled by clicking a BSSID in the Access Point Inventory.",
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "remove_bssid",
+        "type": "textbox",
+        "label": "Revoke BSSID",
+        "description": "Withdraw an authorization, exactly as listed in Our Networks. Normally filled by clicking it there.",
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "hide": 0,
+        "skipUrlSync": false
+      }
+    ]
+  }
+}

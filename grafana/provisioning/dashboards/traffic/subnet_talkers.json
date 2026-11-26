@@ -1,0 +1,293 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "type": "bargauge",
+      "title": "Bytes by Segment",
+      "description": "Bytes sent per source segment, across every segment in the data (not filtered by the Segment picker) so it always gives the full picture.",
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\nzone = (ip) =>\n  if strings.containsStr(v: ip, substr: \":\") then \"IPv6\"\n  else if ip == \"0.0.0.0\" then \"0.0.0.0 unspecified\"\n else if ip =~ /^(22[4-9]|23[0-9])\\./ then \"Multicast\"\n  else if ip =~ /^255\\./ or ip =~ /\\.255$/ then \"Broadcast\"\n  else if ip =~ /^169\\.254\\./ then \"Link-local\"\n  else if ip =~ /^127\\./ then \"Loopback\"\n  else if ip =~ /^(10\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.)/\n    then regexp.replaceAllString(r: /\\.[0-9]+$/, v: ip, t: \".0/24\")\n  else \"Public\"\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> group(columns: [\"src_ip\"])\n  |> sum()\n  |> group()\n  |> map(fn: (r) => ({seg: zone(ip: r.src_ip), _value: r._value}))\n  |> group(columns: [\"seg\"])\n  |> sum()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "continuous-BlPu"
+          },
+          "displayName": "${__field.labels.seg}"
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "Top 10 Talkers — $subnet",
+      "description": "Repeats once per selected segment. The reverse-DNS target resolves the top-10 IPs of every selected segment at once, so this join is inner (not outer) to keep other segments' hostnames out of this table. First load can be slow with a cold cache: dns-resolver looks IPs up sequentially with a 2s timeout each, then caches. Country is from a local GeoIP database (IP geolocation by DB-IP, db-ip.com); \"private network\" for any non-public address.",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "id": 2,
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\nzone = (ip) =>\n  if strings.containsStr(v: ip, substr: \":\") then \"IPv6\"\n  else if ip == \"0.0.0.0\" then \"0.0.0.0 unspecified\"\n  else if ip =~ /^10\\.10\\./ then \" 10.10/16\"\n  else if ip =~ /^(22[4-9]|23[0-9])\\./ then \"Multicast\"\n  else if ip =~ /^255\\./ or ip =~ /\\.255$/ then \"Broadcast\"\n  else if ip =~ /^169\\.254\\./ then \"Link-local\"\n  else if ip =~ /^127\\./ then \"Loopback\"\n  else if ip =~ /^(10\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.)/\n    then regexp.replaceAllString(r: /\\.[0-9]+$/, v: ip, t: \".0/24\")\n  else \"Public\"\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> group(columns: [\"src_ip\"])\n  |> sum()\n  |> group()\n  |> map(fn: (r) => ({r with seg: zone(ip: r.src_ip)}))\n  |> filter(fn: (r) => r.seg == \"$subnet\")\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 10)\n  |> rename(columns: {src_ip: \"ip\", _value: \"bytes\"})\n  |> keep(columns: [\"ip\", \"bytes\"])\n"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://dns-resolver:8000/resolve?ips=${subnet_talkers:csv}&site=${site}",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "ip",
+              "text": "ip",
+              "type": "string"
+            },
+            {
+              "selector": "host",
+              "text": "host",
+              "type": "string"
+            },
+            {
+              "selector": "country",
+              "text": "country",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "repeat": "subnet",
+      "repeatDirection": "v",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Bytes"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "ip",
+            "mode": "inner"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^host.*$",
+            "renamePattern": "host"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^country.*$",
+            "renamePattern": "Country"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "ip": 0,
+              "host": 1,
+              "bytes": 3,
+              "Country": 2
+            },
+            "renameByName": {
+              "ip": "IP",
+              "host": "Hostname",
+              "bytes": "Bytes"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": "",
+            "sort": [
+              {
+                "field": "Bytes",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": [
+    "network",
+    "ndpi",
+    "tzsp",
+    "subnets"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "site",
+        "type": "datasource",
+        "label": "Site",
+        "description": "Which tzsp-monitor instance these panels read. Remote sites are the REMOTE_SITE_* lines in properties.yml of the instance serving this Grafana; each is a datasource pointed at that site's own InfluxDB, so nothing is copied between sites. Controls never follow this box: rule suppression and reverse DNS only ever act on the local site, and are inert while another site is selected.",
+        "query": "influxdb",
+        "regex": "",
+        "current": {
+          "selected": false,
+          "text": "InfluxDB_Flux",
+          "value": "InfluxDB_Flux"
+        },
+        "options": [],
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1,
+        "skipUrlSync": false
+      },
+      {
+        "name": "subnet",
+        "type": "query",
+        "label": "Segment",
+        "description": "Source segments present in the data: named /16 sites, auto-derived /24s for other RFC1918 space, plus Public / Multicast / IPv6 and friends.",
+        "hide": 0,
+        "datasource": {
+          "type": "influxdb",
+          "uid": "${site}"
+        },
+        "definition": "distinct source segments",
+        "query": "import \"regexp\"\nimport \"strings\"\n\nzone = (ip) =>\n  if strings.containsStr(v: ip, substr: \":\") then \"IPv6\"\n  else if ip == \"0.0.0.0\" then \"0.0.0.0 unspecified\"\n  else if ip =~ /^10\\.10\\./ then \" 10.10/16\"\n  else if ip =~ /^(22[4-9]|23[0-9])\\./ then \"Multicast\"\n  else if ip =~ /^255\\./ or ip =~ /\\.255$/ then \"Broadcast\"\n  else if ip =~ /^169\\.254\\./ then \"Link-local\"\n  else if ip =~ /^127\\./ then \"Loopback\"\n  else if ip =~ /^(10\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.)/\n    then regexp.replaceAllString(r: /\\.[0-9]+$/, v: ip, t: \".0/24\")\n  else \"Public\"\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> keep(columns: [\"src_ip\"])\n  |> group()\n  |> distinct(column: \"src_ip\")\n  |> map(fn: (r) => ({_value: zone(ip: r._value)}))\n  |> group()\n  |> distinct(column: \"_value\")\n  |> sort(columns: [\"_value\"])\n",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": null,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "sort": 1
+      },
+      {
+        "name": "subnet_talkers",
+        "type": "query",
+        "label": "Segment talkers (internal)",
+        "description": "Hidden helper: top-10 source IPs per selected segment, fed to the reverse-DNS resolver.",
+        "hide": 2,
+        "datasource": {
+          "type": "influxdb",
+          "uid": "${site}"
+        },
+        "definition": "top 10 src_ip per selected segment",
+        "query": "import \"regexp\"\nimport \"strings\"\n\nzone = (ip) =>\n  if strings.containsStr(v: ip, substr: \":\") then \"IPv6\"\n  else if ip == \"0.0.0.0\" then \"0.0.0.0 unspecified\"\n  else if ip =~ /^10\\.10\\./ then \" 10.10/16\"\n  else if ip =~ /^(22[4-9]|23[0-9])\\./ then \"Multicast\"\n  else if ip =~ /^255\\./ or ip =~ /\\.255$/ then \"Broadcast\"\n  else if ip =~ /^169\\.254\\./ then \"Link-local\"\n  else if ip =~ /^127\\./ then \"Loopback\"\n  else if ip =~ /^(10\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.)/\n    then regexp.replaceAllString(r: /\\.[0-9]+$/, v: ip, t: \".0/24\")\n  else \"Public\"\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> group(columns: [\"src_ip\"])\n  |> sum()\n  |> group()\n  |> map(fn: (r) => ({r with seg: zone(ip: r.src_ip)}))\n  |> filter(fn: (r) => contains(value: r.seg, set: ${subnet:json}))\n  |> group(columns: [\"seg\"])\n  |> top(n: 10, columns: [\"_value\"])\n  |> group()\n  |> keep(columns: [\"src_ip\"])\n  |> rename(columns: {src_ip: \"_value\"})\n",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": null,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Subnet Top Talkers",
+  "uid": "subnet-top-talkers",
+  "version": 2
+}

@@ -1,0 +1,2819 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "uid": "suricata-alerts",
+  "links": [],
+  "liveNow": true,
+  "templating": {
+    "list": [
+      {
+        "name": "site",
+        "type": "datasource",
+        "label": "Site",
+        "description": "Which tzsp-monitor instance these panels read. Remote sites are the REMOTE_SITE_* lines in properties.yml of the instance serving this Grafana; each is a datasource pointed at that site's own InfluxDB, so nothing is copied between sites. Controls never follow this box: rule suppression and reverse DNS only ever act on the local site, and are inert while another site is selected.",
+        "query": "influxdb",
+        "regex": "",
+        "current": {
+          "selected": false,
+          "text": "InfluxDB_Flux",
+          "value": "InfluxDB_Flux"
+        },
+        "options": [],
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1,
+        "skipUrlSync": false
+      },
+      {
+        "name": "cidr",
+        "type": "textbox",
+        "label": "CIDR filter",
+        "description": "Restrict the alert panels to alerts with either endpoint in this range, e.g. 10.12.0.0/16, 10.12.6.0/24, or a bare IP. Leave empty for no filter. Prefix lengths other than /8, /16, /24 and /32 round down to the enclosing octet boundary, so /20 behaves as /16. The pipeline-health tiles ignore it -- they describe the capture, not the traffic.",
+        "hide": 0,
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "skipUrlSync": false
+      },
+      {
+        "name": "severity",
+        "type": "custom",
+        "label": "Severity",
+        "description": "Suricata severity, 1 being the most severe. The responder blocks up to block.max_severity (2 by default), so 3 and 4 are visibility only. Set it from here, or drill down by clicking a bar in Alerts over Time, the Critical & High tile, or a Severity cell in Recent Alerts; the Alerts in Range tile puts it back to All.",
+        "hide": 0,
+        "query": "1 - critical : 1,2 - high : 2,3 - medium : 3,4 - informational : 4",
+        "multi": true,
+        "includeAll": true,
+        "allValue": null,
+        "options": [
+          {
+            "selected": true,
+            "text": "All",
+            "value": "$__all"
+          },
+          {
+            "selected": false,
+            "text": "1 - critical",
+            "value": "1"
+          },
+          {
+            "selected": false,
+            "text": "2 - high",
+            "value": "2"
+          },
+          {
+            "selected": false,
+            "text": "3 - medium",
+            "value": "3"
+          },
+          {
+            "selected": false,
+            "text": "4 - informational",
+            "value": "4"
+          }
+        ],
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "skipUrlSync": false
+      },
+      {
+        "name": "alert_talkers",
+        "type": "query",
+        "label": "Alerting sources (internal)",
+        "description": "Hidden helper: the 10 busiest alerting source IPs, fed to the reverse-DNS resolver.",
+        "hide": 2,
+        "datasource": {
+          "type": "influxdb",
+          "uid": "${site}"
+        },
+        "definition": "top 10 src_ip by alert count",
+        "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary, so the\n// range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nalerts = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"suricata_alert\" and r._field == \"count\")\n  |> filter(fn: (r) => r.severity =~ /^${severity:regex}$/)\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n\nalerts\n  |> group(columns: [\"src_ip\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 10)\n  |> keep(columns: [\"src_ip\"])\n  |> rename(columns: {src_ip: \"_value\"})\n",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": null,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      },
+      {
+        "name": "disable_sid",
+        "type": "textbox",
+        "label": "Disable SID",
+        "description": "Suppress this signature: a bare sid suppresses it everywhere, `<sid>@src:<ip or cidr>`, `<sid>@dst:<ip or cidr>` or `<sid>@either:<ip or cidr>` only for alerts with that source / destination / either endpoint (e.g. 2013028@src:10.1.2.3, 2013028@dst:10.1.0.0/16). Normally filled by clicking a SID rather than typed. It stays filled and is re-sent on every refresh, which is harmless: rule-control only rewrites threshold.config and reloads Suricata when the set of suppressions actually changes.",
+        "hide": 0,
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "skipUrlSync": false
+      },
+      {
+        "name": "enable_sid",
+        "type": "textbox",
+        "label": "Re-enable SID",
+        "description": "Restore a suppression, named the same way it was made (a bare sid, or `<sid>@src:<ip>` etc. for a scoped one); the literal value `all` restores every one of them. Normally filled by clicking a SID in the Suppressed Rules panel. Ignored, like the disable box, when rule_control.enabled is false.",
+        "hide": 0,
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "IDS Feed",
+      "description": "Seconds since Suricata last reported its counters (it does so every 30s). If this is not LIVE, nothing else on this dashboard is current and no alert would be raised or blocked -- escalate before reading anything else.",
+      "id": 1,
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\n// Sentinel: without it a dead IDS renders an empty tile, which looks exactly\n// like a quiet network.\nlatest = from(bucket: \"network_traffic\")\n  |> range(start: -6h, stop: now())\n  |> filter(fn: (r) => r._measurement == \"suricata_stats\" and r._field == \"uptime\")\n  |> group()\n  |> max(column: \"_time\")\n  |> map(fn: (r) => ({age: float(v: int(v: now()) - int(v: r._time)) / 1000000000.0}))\n  |> keep(columns: [\"age\"])\n\nunion(tables: [latest, array.from(rows: [{age: 99999.0}])])\n  |> group()\n  |> min(column: \"age\")\n  |> rename(columns: {age: \"_value\"})\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 90,
+                "result": {
+                  "text": "LIVE",
+                  "color": "#0ca30c",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 90,
+                "to": 600,
+                "result": {
+                  "text": "LAGGING",
+                  "color": "#fab219",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 600,
+                "to": 999999,
+                "result": {
+                  "text": "NO DATA",
+                  "color": "#d03b3b",
+                  "index": 2
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 42
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Mirror to IDS",
+      "description": "Packets per second the TZSP decapsulator is handing to Suricata, with the recent trend behind it. No colour threshold on purpose: there is no correct value to alarm against. Judge a dead feed from the 'IDS Feed' tile instead.",
+      "id": 2,
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"tzsp_decap\" and r._field == \"pps\")\n  |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)\n  |> group()\n  |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "pps",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 34
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Capture Loss",
+      "description": "Share of packets Suricata's capture ring dropped. Anything above a few percent means the IDS is not seeing all of the mirror, so alerts are being missed silently -- raise af-packet threads or ring-size in suricata.yaml. The 'Pipeline Health' panel below shows the raw counts, including UDP receive drops on the decapsulator, which is the other place packets vanish.",
+      "id": 3,
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\nloss = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"suricata_stats\" and r._field == \"drop_percent\")\n  |> group()\n  |> last()\n  |> keep(columns: [\"_value\"])\n\n// -1 marks \"no reading at all\", which must not look like \"no loss\".\nunion(tables: [loss, array.from(rows: [{_value: -1.0}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": -1000,
+                "to": -0.5,
+                "result": {
+                  "text": "NO DATA",
+                  "color": "#9ca3af",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": -0.5,
+                "to": 1,
+                "result": {
+                  "text": "NO LOSS",
+                  "color": "#0ca30c",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 1,
+                "to": 5,
+                "result": {
+                  "text": "SOME LOSS",
+                  "color": "#fab219",
+                  "index": 2
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 5,
+                "to": 100000,
+                "result": {
+                  "text": "LOSING PACKETS",
+                  "color": "#d03b3b",
+                  "index": 3
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 42
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Alerts in Range",
+      "description": "Every alert Suricata raised in the dashboard time range, after the CIDR and severity filters. Context, not an alarm: a busy ruleset on a real network always produces some. It honours the Severity filter, so it doubles as the way back out of a drill-down: clicking the tile puts Severity back to All.",
+      "id": 4,
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary, so the\n// range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nalerts = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"suricata_alert\" and r._field == \"count\")\n  |> filter(fn: (r) => r.severity =~ /^${severity:regex}$/)\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\nseen = alerts\n  |> group()\n  |> sum()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "links": [
+            {
+              "title": "Clear the severity filter",
+              "url": "/d/suricata-alerts?${__url_time_range}&${site:queryparam}&${cidr:queryparam}&var-severity=$__all&var-disable_sid=&var-enable_sid=",
+              "targetBlank": false
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 42
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Critical & High",
+      "description": "Alerts of severity 1 or 2 -- the band that by default is allowed to put an address on the router. Deliberately ignores the Severity filter above so the tile always answers the same question. The bands are starting points: measure your own network for a week before tightening them. Click the tile to set the Severity filter to 1 and 2, which is the fastest way from \"something serious happened\" to the signature that fired.",
+      "id": 5,
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary, so the\n// range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\nseen = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"suricata_alert\" and r._field == \"count\")\n  |> filter(fn: (r) => r.severity == \"1\" or r.severity == \"2\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group()\n  |> sum()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 1,
+                "result": {
+                  "text": "NONE",
+                  "color": "#0ca30c",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 1,
+                "to": 25,
+                "result": {
+                  "text": "SOME",
+                  "color": "#fab219",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 25,
+                "to": 100000000,
+                "result": {
+                  "text": "MANY",
+                  "color": "#d03b3b",
+                  "index": 2
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          },
+          "links": [
+            {
+              "title": "Drill down: critical and high only",
+              "url": "/d/suricata-alerts?${__url_time_range}&${site:queryparam}&${cidr:queryparam}&var-severity=1&var-severity=2&var-disable_sid=&var-enable_sid=",
+              "targetBlank": false
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 42
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Router API",
+      "description": "Whether the responder could reach the Mikrotik REST API on its last probe. NOT CONFIGURED means no property file or mikrotik.enabled=false: alerts are still collected, but nothing is ever blocked. UNREACHABLE means detections are happening and the router is not being updated. With several routers (mikrotik.routers) this is the worst of them: UNREACHABLE if any one cannot be reached; the Router column in Router Actions says which.",
+      "id": 6,
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\napi = from(bucket: \"network_traffic\")\n  |> range(start: -15m, stop: now())\n  |> filter(fn: (r) => r._measurement == \"mikrotik_api\" and r._field == \"up\")\n  // Newest reading per router, then the worst of them: with several routers,\n  // one the responder cannot reach is detections not reaching that router.\n  |> last()\n  |> group()\n  |> min()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [api, array.from(rows: [{_value: -1}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "NOT CONFIGURED",
+                  "color": "#9ca3af",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "UNREACHABLE",
+                  "color": "#d03b3b",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "REACHABLE",
+                  "color": "#0ca30c",
+                  "index": 2
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 26
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 7,
+      "title": "Alerts over Time by Severity (click a bar to drill down)",
+      "description": "Stacked count of alerts per bucket, and the entry point for a severity drill-down: click a bar and pick \"Only this severity\" to set the Severity filter, which narrows every alert panel below -- including Recent Alerts, whose 100-row limit is otherwise filled by informational noise long before a critical alert is reachable. The bucket is derived from the time range (~96 bars, floored at 1m) rather than from v.windowPeriod, so zooming in genuinely increases resolution without letting a wide panel ask for finer buckets. Bars are labelled with the START of their window, so zooming onto a bar selects the alerts that drew it. Colour is fixed per severity, so filtering one out never repaints the others.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary, so the\n// range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\n// The bucket follows the selected *time range*, not the panel width: ~96 bars\n// however far you zoom, floored at a minute. v.windowPeriod follows pixels, so\n// a wide panel would silently ask for finer buckets, but the pinned 15m this\n// replaces had the opposite failure -- any zoom below 15 minutes collapsed the\n// chart to a single bar, so narrowing in on a spike is what made it vanish.\n// What costs here is the bar count, and that is constant; at the dashboard's\n// default 24h this is still exactly the old window (24h / 96 == 15m).\nspanNs = int(v: v.timeRangeStop) - int(v: v.timeRangeStart)\neveryNs = if spanNs / 96 < 60000000000 then 60000000000 else spanNs / 96\nevery = duration(v: everyNs)\n\nalerts = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"suricata_alert\" and r._field == \"count\")\n  |> filter(fn: (r) => r.severity =~ /^${severity:regex}$/)\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n\n// timeSrc: \"_start\" puts each bar at the beginning of the window it covers.\n// With the default \"_stop\" a bar drawn at 10:15 holds 10:00-10:15, so zooming\n// onto the bar selects the fifteen minutes *after* the alerts that drew it and\n// the spike disappears -- which is the one thing this panel exists to allow.\n// `severity` is carried next to `severity_name` only so the data link has a\n// value for the Severity variable, which filters on the numeric tag.\nalerts\n  |> aggregateWindow(every: every, fn: sum, timeSrc: \"_start\", createEmpty: false)\n  |> group(columns: [\"severity\", \"severity_name\"])\n  |> aggregateWindow(every: every, fn: sum, timeSrc: \"_start\", createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"severity\", \"severity_name\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "gradientMode": "none",
+            "barAlignment": 1,
+            "showPoints": "never",
+            "axisSoftMin": 0
+          },
+          "links": [
+            {
+              "title": "Only this severity",
+              "url": "/d/suricata-alerts?${__url_time_range}&${site:queryparam}&${cidr:queryparam}&var-severity=${__field.labels.severity}&var-disable_sid=&var-enable_sid=",
+              "targetBlank": false
+            }
+          ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*critical.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d03b3b"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "1 - critical"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*high.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#ec835a"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "2 - high"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*medium.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#e3c93c"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "3 - medium"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*info.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3b82f6"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "4 - informational"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "barchart",
+      "id": 8,
+      "title": "Top 10 Signatures",
+      "description": "Which rules are actually firing. One hue: the bars encode a single magnitude, so colouring them differently would imply a category that is not there. Read this before tuning block.max_severity -- a single chatty signature at severity 2 is the usual reason a network appears to be under attack.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary, so the\n// range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nalerts = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"suricata_alert\" and r._field == \"count\")\n  |> filter(fn: (r) => r.severity =~ /^${severity:regex}$/)\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n\nalerts\n  |> group(columns: [\"signature\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 10)\n  |> keep(columns: [\"signature\", \"_value\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3b82f6"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 90,
+            "gradientMode": "none",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "showValue": "auto",
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "type": "table",
+      "id": 9,
+      "title": "Top 10 Alerting Sources",
+      "description": "The busiest source addresses, with reverse DNS from the dns-resolver sidecar and how many times each was actually sent to the router. A high alert count with zero router actions is normal for a whitelisted address or one below the block threshold -- check the Decision column in the detail table below to see which. Country is from a local GeoIP database (IP geolocation by DB-IP, db-ip.com); \"private network\" for any non-public address.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "ip",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^country.*$",
+            "renamePattern": "Country"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^host.*$",
+            "renamePattern": "Hostname"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "ip": 0,
+              "Hostname": 1,
+              "alerts": 3,
+              "blocks": 4,
+              "Country": 2
+            },
+            "renameByName": {
+              "ip": "Source IP",
+              "alerts": "Alerts",
+              "blocks": "Router actions"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Alerts",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary, so the\n// range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nalerts = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"suricata_alert\" and r._field == \"count\")\n  |> filter(fn: (r) => r.severity =~ /^${severity:regex}$/)\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n\nalerts\n  |> group(columns: [\"src_ip\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 10)\n  |> rename(columns: {src_ip: \"ip\", _value: \"alerts\"})\n  |> keep(columns: [\"ip\", \"alerts\"])\n"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://dns-resolver:8000/resolve?ips=${alert_talkers:csv}&site=${site}",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "ip",
+              "text": "ip",
+              "type": "string"
+            },
+            {
+              "selector": "host",
+              "text": "host",
+              "type": "string"
+            },
+            {
+              "selector": "country",
+              "text": "country",
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"suricata_block\" and r._field == \"count\")\n  |> filter(fn: (r) => r.result == \"added\" or r.result == \"refreshed\")\n  |> filter(fn: (r) => r.list != \"dns-blacklist\")\n  |> group(columns: [\"ip\"])\n  |> sum()\n  |> group()\n  |> rename(columns: {_value: \"blocks\"})\n  |> keep(columns: [\"ip\", \"blocks\"])\n"
+        }
+      ]
+    },
+    {
+      "type": "barchart",
+      "id": 10,
+      "title": "Alerts by Category",
+      "description": "Emerging Threats classtype, which is the quickest way to see whether you are looking at scanning noise, policy violations or something that suggests a host is already compromised.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 22
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary, so the\n// range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nalerts = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"suricata_alert\" and r._field == \"count\")\n  |> filter(fn: (r) => r.severity =~ /^${severity:regex}$/)\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n\nalerts\n  |> group(columns: [\"category\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 10)\n  |> keep(columns: [\"category\", \"_value\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3b82f6"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 90,
+            "gradientMode": "none",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0,
+        "showValue": "auto",
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "type": "table",
+      "id": 11,
+      "title": "Router Actions (block, quarantine, DNS blacklist)",
+      "description": "What the responder actually did to /ip/firewall/address-list, newest first. 'added' and 'refreshed' both mean the address is listed now; 'FAILED' means an alert qualified but the router rejected or never answered the call, so the address is NOT blocked. Remember that being on the list only drops traffic if you have a firewall rule referencing it. The List column says which response it was: the block list (external attackers), the quarantine list (internal hosts that tripped a compromise signature), or dns-blacklist (a domain handed to dns-filter, which does the router side itself). With several routers every write is one row per router; Router is empty for points written before routers were named.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 22
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Result"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "added": {
+                        "text": "added",
+                        "color": "#0ca30c",
+                        "index": 0
+                      },
+                      "refreshed": {
+                        "text": "refreshed",
+                        "color": "#0ca30c",
+                        "index": 1
+                      },
+                      "dry-run": {
+                        "text": "dry-run",
+                        "color": "#9ca3af",
+                        "index": 2
+                      },
+                      "vanished": {
+                        "text": "vanished",
+                        "color": "#fab219",
+                        "index": 3
+                      },
+                      "dropped-queue-full": {
+                        "text": "queue full",
+                        "color": "#ec835a",
+                        "index": 4
+                      },
+                      "error": {
+                        "text": "FAILED",
+                        "color": "#d03b3b",
+                        "index": 5
+                      },
+                      "refused": {
+                        "text": "refused",
+                        "color": "#fab219",
+                        "index": 6
+                      },
+                      "read-only": {
+                        "text": "read-only",
+                        "color": "#9ca3af",
+                        "index": 7
+                      },
+                      "unknown": {
+                        "text": "unknown",
+                        "color": "#9ca3af",
+                        "index": 8
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "API latency"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "List"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 160
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Router"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "timeout": true
+            },
+            "indexByName": {
+              "_time": 0,
+              "router": 1,
+              "list": 2,
+              "ip": 3,
+              "result": 4,
+              "signature": 5,
+              "latency_ms": 6
+            },
+            "renameByName": {
+              "_time": "Time",
+              "ip": "Address / domain",
+              "result": "Result",
+              "signature": "Triggered by",
+              "timeout": "RouterOS timeout",
+              "latency_ms": "API latency",
+              "list": "List",
+              "router": "Router"
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "format": "table",
+          "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"suricata_block\")\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> group()\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 100)\n  |> keep(columns: [\"_time\", \"router\", \"list\", \"ip\", \"result\", \"signature\", \"timeout\", \"latency_ms\"])\n"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Time",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 12,
+      "title": "Pipeline Health: packets in vs packets lost",
+      "description": "The places a packet can disappear before it is ever inspected: the decapsulator's UDP socket (kernel receive drops, usually means the Python receiver cannot keep up) and Suricata's capture ring (usually means too few af-packet threads). On a VXLAN-fed host there is a third, vxlan-tzsp's own UDP socket, in front of both. Both are plotted against the same axis as the packet count, so their relative size is readable directly.",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "// The bucket follows the selected *time range*, not the panel width: ~96\n// points however far you zoom, floored at a minute -- the same derivation as\n// Alerts over Time above, so the two charts line up bucket for bucket when the\n// range is changed. v.windowPeriod would follow pixels instead, and the pinned\n// 15m it replaces meant any zoom below 15 minutes collapsed to a single point,\n// which a line chart with no point markers draws as nothing at all. What costs\n// here is the point count, and that is constant; at the dashboard's default\n// 24h this is still exactly the old window (24h / 96 == 15m).\nspanNs = int(v: v.timeRangeStop) - int(v: v.timeRangeStart)\neveryNs = if spanNs / 96 < 60000000000 then 60000000000 else spanNs / 96\nevery = duration(v: everyNs)\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) =>\n      (r._measurement == \"tzsp_decap\" and (r._field == \"packets\" or r._field == \"udp_drops\"))\n      or (r._measurement == \"suricata_stats\" and r._field == \"drops\")\n      // Only on a host running docker-compose.vxlan.yml; absent elsewhere.\n      or (r._measurement == \"vxlan_tzsp\" and r._field == \"udp_drops\"))\n  |> aggregateWindow(every: every, fn: sum, timeSrc: \"_start\", createEmpty: false)\n  |> group(columns: [\"_measurement\", \"_field\"])\n  |> aggregateWindow(every: every, fn: sum, timeSrc: \"_start\", createEmpty: false)\n  // Pushdown aggregates first, then one map over the handful of rows left, using\n  // the `{r with ...}` form -- a map that builds a fresh record here returns an\n  // empty frame.\n  |> map(fn: (r) => ({r with series: r._measurement + \" \" + r._field}))\n  |> keep(columns: [\"_time\", \"_value\", \"series\"])\n  |> group(columns: [\"series\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*tzsp_decap packets.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3b82f6"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Decapsulated into the IDS"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*suricata_stats drops.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#ec835a"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Lost in Suricata's capture ring"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*tzsp_decap udp_drops.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d03b3b"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Lost on the UDP socket"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*vxlan_tzsp udp_drops.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9b59d0"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "Lost before VXLAN re-wrap"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Disk Used",
+      "description": "How full the filesystem behind the Docker volumes is, as df prints it. disk-guard reclaims at disk_guard.max_disk_percent (90 by default) by deleting rotated Suricata logs oldest-first and, only if that is not enough, by cutting the InfluxDB retention. NO DATA means the disk-guard container is not running, which is the state in which nothing here is bounded at all. Like the other pipeline tiles this ignores the CIDR box: it describes the host, not the traffic.",
+      "id": 18,
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 37
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\nreading = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"disk_guard\" and r._field == \"used_percent\")\n  |> group()\n  |> last()\n  |> keep(columns: [\"_value\"])\n\n// -1 marks \"the guard is not running\", which must not look like an empty disk.\nunion(tables: [reading, array.from(rows: [{_value: -1.0}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": -1000,
+                "to": -0.5,
+                "result": {
+                  "text": "NO DATA",
+                  "color": "#9ca3af",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#0ca30c",
+                "value": null
+              },
+              {
+                "color": "#fab219",
+                "value": 80
+              },
+              {
+                "color": "#d03b3b",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 34
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Disk Guard",
+      "description": "What disk-guard is doing about it. OK: inside every budget. TIGHT: past disk_guard.warn_disk_percent, nothing deleted yet. RECLAIMING: it is deleting rotated logs or has cut the InfluxDB retention -- this stack is throwing data away right now, and disk_guard_action records what went. NO SPACE LEFT: everything it is allowed to delete is gone and the disk is still over the ceiling, so what is filling it is outside this stack. NOT RUNNING means the guard itself is down.",
+      "id": 19,
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 4,
+        "y": 37
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\nreading = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"disk_guard\" and r._field == \"state_code\")\n  |> group()\n  |> last()\n  |> keep(columns: [\"_value\"])\n\n// -1 is \"no guard is reporting\", which is the one state the guard cannot report itself.\nunion(tables: [reading, array.from(rows: [{_value: -1}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "NOT RUNNING",
+                  "color": "#9ca3af",
+                  "index": 0
+                },
+                "0": {
+                  "text": "OK",
+                  "color": "#0ca30c",
+                  "index": 1
+                },
+                "1": {
+                  "text": "TIGHT",
+                  "color": "#fab219",
+                  "index": 2
+                },
+                "2": {
+                  "text": "RECLAIMING",
+                  "color": "#ec835a",
+                  "index": 3
+                },
+                "3": {
+                  "text": "NO SPACE LEFT",
+                  "color": "#d03b3b",
+                  "index": 4
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 26
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Suricata Logs",
+      "description": "Everything in /var/log/suricata: the live eve.json, suricata.log and every rotation of them. Bounded by disk_guard.logs_max_bytes (2G by default), which is the knob to raise for more alert history -- the retain window in days is only the secondary limit. eve.json itself is rotated at disk_guard.eve_max_bytes; Suricata's own rotate-interval does not work.",
+      "id": 20,
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 9,
+        "y": 37
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"disk_guard\" and r._field == \"logs_bytes\")\n  |> group()\n  |> last()\n  |> keep(columns: [\"_value\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 34
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "InfluxDB Data",
+      "description": "On-disk size of the network_traffic bucket, as InfluxDB reports it in storage_shard_disk_size -- flows, alerts, stats and the DNS-filter series together. It grows until the retention on the right expires the oldest shard group, so it is expected to plateau, not to fall.",
+      "id": 21,
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 14,
+        "y": 37
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"disk_guard\" and r._field == \"bucket_bytes\")\n  |> group()\n  |> last()\n  |> keep(columns: [\"_value\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 34
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "InfluxDB Retention (days)",
+      "description": "How much history the bucket is keeping. disk-guard applies disk_guard.influx_retention_days over the API on every pass (the bucket is created with INFINITE retention, so without the guard nothing is ever expired). A number below what is configured means the guard cut it under disk pressure: the Disk Guard tile reads RECLAIMING while that happens and disk_guard_action keeps the record. Editing the property file is what puts it back up.",
+      "id": 22,
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 19,
+        "y": 37
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"disk_guard\" and r._field == \"retention_days\")\n  |> group()\n  |> last()\n  |> keep(columns: [\"_value\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "NO DATA",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 14,
+          "valueSize": 34
+        }
+      }
+    },
+    {
+      "type": "table",
+      "id": 13,
+      "title": "Recent Alerts (full detail -- click a severity to drill down)",
+      "description": "The last 100 matching alerts with everything the collector kept: both endpoints and ports, the rule and its sid, the app-layer context Suricata extracted, the printable payload, and the responder's decision. Every column is filterable -- start here when working out why an address was or was not blocked. Clicking a Severity cell filters the whole dashboard to that severity, which is what makes the 100-row limit usable on a busy sensor: unfiltered, the rows are whatever arrived most recently, and the informational two thirds of the ET ruleset fills them long before a critical alert is reachable. The cell shows the numeric severity behind a value mapping, so the data link's ${__value.raw} is the number the variable wants, never the rendered label.",
+      "gridPos": {
+        "h": 13,
+        "w": 24,
+        "x": 0,
+        "y": 42
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto",
+              "wrapText": false
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Decision"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "blocking": {
+                        "text": "sent to router",
+                        "color": "#d03b3b",
+                        "index": 0
+                      },
+                      "already-listed": {
+                        "text": "already listed",
+                        "color": "#ec835a",
+                        "index": 1
+                      },
+                      "below-threshold": {
+                        "text": "below alert threshold",
+                        "color": "#fab219",
+                        "index": 2
+                      },
+                      "below-severity": {
+                        "text": "below severity cut-off",
+                        "color": "#9ca3af",
+                        "index": 3
+                      },
+                      "whitelisted": {
+                        "text": "whitelisted",
+                        "color": "#3b82f6",
+                        "index": 4
+                      },
+                      "ignored-sid": {
+                        "text": "sid ignored",
+                        "color": "#9ca3af",
+                        "index": 5
+                      },
+                      "ignored-signature": {
+                        "text": "signature ignored",
+                        "color": "#9ca3af",
+                        "index": 6
+                      },
+                      "stale": {
+                        "text": "too old to act on",
+                        "color": "#9ca3af",
+                        "index": 7
+                      },
+                      "no-router": {
+                        "text": "no router configured",
+                        "color": "#9ca3af",
+                        "index": 8
+                      },
+                      "quarantining": {
+                        "text": "host quarantined",
+                        "color": "#d03b3b",
+                        "index": 9
+                      },
+                      "domain-blocking": {
+                        "text": "domain blacklisted",
+                        "color": "#d03b3b",
+                        "index": 10
+                      },
+                      "blocking+quarantining": {
+                        "text": "blocked + quarantined",
+                        "color": "#d03b3b",
+                        "index": 11
+                      },
+                      "blocking+domain-blocking": {
+                        "text": "blocked + domain blacklisted",
+                        "color": "#d03b3b",
+                        "index": 12
+                      },
+                      "quarantining+domain-blocking": {
+                        "text": "quarantined + domain blacklisted",
+                        "color": "#d03b3b",
+                        "index": 13
+                      },
+                      "blocking+quarantining+domain-blocking": {
+                        "text": "blocked + quarantined + domain",
+                        "color": "#d03b3b",
+                        "index": 14
+                      },
+                      "quarantine-capped": {
+                        "text": "QUARANTINE CAP HIT",
+                        "color": "#ec835a",
+                        "index": 15
+                      },
+                      "domain-capped": {
+                        "text": "domain cap hit",
+                        "color": "#ec835a",
+                        "index": 16
+                      },
+                      "scanner-listing": {
+                        "text": "scanner listed",
+                        "color": "#d03b3b",
+                        "index": 17
+                      },
+                      "blocking+scanner-listing": {
+                        "text": "blocked + scanner listed",
+                        "color": "#d03b3b",
+                        "index": 18
+                      },
+                      "scanner-capped": {
+                        "text": "scanner cap hit",
+                        "color": "#ec835a",
+                        "index": 19
+                      }
+                    }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": ".+\\+.+",
+                      "result": {
+                        "text": "several responses",
+                        "color": "#d03b3b",
+                        "index": 20
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Severity"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "1": {
+                        "text": "1 - critical",
+                        "color": "#d03b3b",
+                        "index": 0
+                      },
+                      "2": {
+                        "text": "2 - high",
+                        "color": "#ec835a",
+                        "index": 1
+                      },
+                      "3": {
+                        "text": "3 - medium",
+                        "color": "#e3c93c",
+                        "index": 2
+                      },
+                      "4": {
+                        "text": "4 - informational",
+                        "color": "#3b82f6",
+                        "index": 3
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Only this severity",
+                    "url": "/d/suricata-alerts?${__url_time_range}&${site:queryparam}&${cidr:queryparam}&var-severity=${__value.raw}&var-disable_sid=&var-enable_sid=",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 155
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Severity"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Signature"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 230
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Category"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Source"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Src port"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Destination"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 120
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Dst port"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Proto"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 65
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "App"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 75
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Decision"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 160
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "SID"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Suppress this rule everywhere",
+                    "url": "/d/suricata-alerts?${__url_time_range}&${site:queryparam}&${cidr:queryparam}&${severity:queryparam}&var-disable_sid=${__value.raw}&var-enable_sid=",
+                    "targetBlank": false
+                  },
+                  {
+                    "title": "Suppress only from source ${__data.fields.Source}",
+                    "url": "/d/suricata-alerts?${__url_time_range}&${site:queryparam}&${cidr:queryparam}&${severity:queryparam}&var-disable_sid=${__value.raw}@src:${__data.fields.Source:percentencode}&var-enable_sid=",
+                    "targetBlank": false
+                  },
+                  {
+                    "title": "Suppress only to destination ${__data.fields.Destination}",
+                    "url": "/d/suricata-alerts?${__url_time_range}&${site:queryparam}&${cidr:queryparam}&${severity:queryparam}&var-disable_sid=${__value.raw}@dst:${__data.fields.Destination:percentencode}&var-enable_sid=",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "App-layer context"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 220
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Payload"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 220
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "action": true
+            },
+            "indexByName": {
+              "_time": 0,
+              "signature": 2,
+              "category": 3,
+              "src_ip": 4,
+              "src_port": 5,
+              "dst_ip": 6,
+              "dst_port": 7,
+              "proto": 8,
+              "app_proto": 9,
+              "decision": 10,
+              "signature_id": 11,
+              "details": 12,
+              "payload": 13,
+              "severity": 1
+            },
+            "renameByName": {
+              "_time": "Time",
+              "signature": "Signature",
+              "category": "Category",
+              "src_ip": "Source",
+              "src_port": "Src port",
+              "dst_ip": "Destination",
+              "dst_port": "Dst port",
+              "proto": "Proto",
+              "app_proto": "App",
+              "decision": "Decision",
+              "signature_id": "SID",
+              "details": "App-layer context",
+              "payload": "Payload",
+              "severity": "Severity"
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "format": "table",
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary, so the\n// range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"suricata_alert\")\n  |> filter(fn: (r) => r.severity =~ /^${severity:regex}$/)\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> group()\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 100)\n  // `severity` rather than `severity_name`: the numeric tag is what the\n  // Severity variable filters on, so the column can carry its own data link,\n  // and 1..4 sorts in severity order where the names sort alphabetically.\n  |> keep(columns: [\"_time\", \"severity\", \"signature\", \"category\", \"src_ip\",\n                    \"src_port\", \"dst_ip\", \"dst_port\", \"proto\", \"app_proto\",\n                    \"decision\", \"action\", \"signature_id\", \"details\", \"payload\"])\n"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Time",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Rule Control",
+      "description": "State of the rule-control service. Command socket CONNECTED means a suppression takes effect immediately; NO SOCKET means the change is written but only applies when Suricata next restarts. READ-ONLY is rule_control.enabled = false in suricata.properties: the list below still renders, but no click changes anything. OTHER SITE means the Site box points at a remote instance: rule-control only acts on the site it runs in, so nothing here is shown or changeable for another one -- use that site's own Grafana.",
+      "id": 14,
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 0,
+        "y": 55
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://rule-control:8020/status?site=${site}",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "disabled",
+              "text": "disabled",
+              "type": "number"
+            },
+            {
+              "selector": "control_enabled",
+              "text": "control_enabled",
+              "type": "number"
+            },
+            {
+              "selector": "suricata_socket",
+              "text": "suricata_socket",
+              "type": "number"
+            }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "UNREACHABLE"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "disabled"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Suppressions"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#9ca3af",
+                      "value": null
+                    },
+                    {
+                      "color": "#3b82f6",
+                      "value": 1
+                    },
+                    {
+                      "color": "#fab219",
+                      "value": 50
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "-1": {
+                        "text": "-",
+                        "color": "#9ca3af",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "control_enabled"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Actions"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "READ-ONLY",
+                        "color": "#9ca3af",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "WRITABLE",
+                        "color": "#0ca30c",
+                        "index": 1
+                      },
+                      "2": {
+                        "text": "OTHER SITE",
+                        "color": "#9ca3af",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "suricata_socket"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Command socket"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "text": "NO SOCKET",
+                        "color": "#fab219",
+                        "index": 0
+                      },
+                      "1": {
+                        "text": "CONNECTED",
+                        "color": "#0ca30c",
+                        "index": 1
+                      },
+                      "-1": {
+                        "text": "-",
+                        "color": "#9ca3af",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 13,
+          "valueSize": 22
+        }
+      }
+    },
+    {
+      "type": "text",
+      "title": "How rule tuning works",
+      "id": 15,
+      "gridPos": {
+        "h": 5,
+        "w": 16,
+        "x": 8,
+        "y": 55
+      },
+      "options": {
+        "mode": "markdown",
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "**Suppress a rule:** click its **SID** in *Noisiest Signatures* or in *Recent Alerts*. In *Recent Alerts* the click also offers **only from this source** / **only to this destination**: the rule keeps alerting for everyone else (Suricata `track by_src` / `by_dst`). To scope by hand, type `<sid>@src:<ip or cidr>`, `<sid>@dst:...` or `<sid>@either:...` into `Disable SID`. A source *and* destination pair is not possible -- Suricata suppresses on one side only. That fills the `Disable SID` box, which makes the *Suppressed Rules* panel call rule-control: it writes a `suppress` line into `threshold.config` and asks Suricata to reload its ruleset -- no restart, no gap in the capture. The rule still runs; only its alert is suppressed, so nothing has to be rebuilt to get it back.\n\n**Restore a rule:** click its **SID** in *Suppressed Rules* (each row is one suppression -- the whole rule or one scope), or type `all` into `Re-enable SID`. Each click clears the other box, so a restore is never immediately undone by a stale disable.\n\nEvery change is also written to InfluxDB as `suricata_rule_control`, because \"when was this turned off, and for what\" outlives the container log. **Anyone who can view this dashboard can suppress a rule** -- the call runs with the datasource's identity, not the viewer's. Set `rule_control.enabled = false` to make it read-only.\n\n**Only on this site.** With another site picked in the `Site` box the alert panels show that site, but rule-control still belongs to this one -- so it refuses changes and lists nothing rather than suppressing a rule here because of an alert there."
+      }
+    },
+    {
+      "type": "table",
+      "title": "Noisiest Signatures (click a SID to suppress)",
+      "description": "The same ranking as the bar chart above, with the sid needed to act on it. The sid comes from a second query because signature_id is a field, not a tag, so it cannot be grouped -- last() per signature pushes down and Grafana joins the two frames on the signature text.",
+      "id": 16,
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 60
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary, so the\n// range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nalerts = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"suricata_alert\" and r._field == \"count\")\n  |> filter(fn: (r) => r.severity =~ /^${severity:regex}$/)\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n\nalerts\n  |> group(columns: [\"signature\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 20)\n  |> rename(columns: {_value: \"alerts\"})\n  |> keep(columns: [\"signature\", \"alerts\"])\n"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored prefix\n// regex, the only form InfluxDB pushes down to storage. Prefix lengths other\n// than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary, so the\n// range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"suricata_alert\" and r._field == \"signature_id\")\n  |> filter(fn: (r) => r.severity =~ /^${severity:regex}$/)\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"signature\"])\n  |> last()\n  |> group()\n  |> rename(columns: {_value: \"sid\"})\n  |> keep(columns: [\"signature\", \"sid\"])\n"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "signature",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^alerts.*$",
+            "renamePattern": "Alerts"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^sid.*$",
+            "renamePattern": "SID"
+          }
+        },
+        {
+          "id": "filterByValue",
+          "options": {
+            "type": "include",
+            "match": "all",
+            "filters": [
+              {
+                "fieldName": "Alerts",
+                "config": {
+                  "id": "isNotNull",
+                  "options": {}
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "signature": 0,
+              "SID": 1,
+              "Alerts": 2
+            },
+            "renameByName": {
+              "signature": "Signature"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Alerts",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "SID"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Suppress this rule",
+                    "url": "/d/suricata-alerts?${__url_time_range}&${site:queryparam}&${cidr:queryparam}&${severity:queryparam}&var-disable_sid=${__value.raw}&var-enable_sid=",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Alerts"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Alerts",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "title": "Suppressed Rules (click a SID to restore that line)",
+      "description": "The suppressions currently in force, straight from rule-control. Scope is `everywhere` for a whole-rule suppression, or the source / destination / either-end address or range a scoped one applies to -- the same sid can appear several times. This panel is also what performs the change: the request carries the two sid boxes, so the list rendered here is the state after the action. The signature text is stored when a rule is suppressed rather than looked up on read, so it still says what the rule was after suricata-update drops it from the ruleset.",
+      "id": 17,
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 60
+      },
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://rule-control:8020/apply?disable=${disable_sid:percentencode}&enable=${enable_sid:percentencode}&site=${site}",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "sid",
+              "text": "SID",
+              "type": "number"
+            },
+            {
+              "selector": "scope",
+              "text": "Scope",
+              "type": "string"
+            },
+            {
+              "selector": "signature",
+              "text": "Signature",
+              "type": "string"
+            },
+            {
+              "selector": "key",
+              "text": "Key",
+              "type": "string"
+            },
+            {
+              "selector": "since",
+              "text": "Suppressed since",
+              "type": "string"
+            },
+            {
+              "selector": "note",
+              "text": "Note",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Suppressed since",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "SID"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Re-enable this suppression (${__data.fields.Scope})",
+                    "url": "/d/suricata-alerts?${__url_time_range}&${site:queryparam}&${cidr:queryparam}&${severity:queryparam}&var-enable_sid=${__data.fields.Key:percentencode}&var-disable_sid=",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Suppressed since"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 190
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Scope"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 200
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Key"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Suppressed since",
+            "desc": true
+          }
+        ]
+      }
+    }
+  ],
+  "refresh": "1m",
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": [
+    "network",
+    "tzsp",
+    "suricata",
+    "ids",
+    "security"
+  ],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Suricata Alerts & Auto-Block",
+  "version": 1
+}

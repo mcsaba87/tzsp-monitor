@@ -1,0 +1,1794 @@
+{
+ "uid": "ip-reputation",
+ "title": "IP Reputation Blocking",
+ "description": "Public IP reputation feeds (Spamhaus DROP, abuse.ch Feodo, ...) merged onto one Mikrotik address list. A control surface: the two tables perform the changes they display.",
+ "tags": [
+  "security",
+  "mikrotik",
+  "blocklist",
+  "reputation"
+ ],
+ "timezone": "browser",
+ "editable": true,
+ "graphTooltip": 1,
+ "schemaVersion": 36,
+ "version": 1,
+ "refresh": "1m",
+ "time": {
+  "from": "now-24h",
+  "to": "now"
+ },
+ "timepicker": {},
+ "annotations": {
+  "list": []
+ },
+ "templating": {
+  "list": [
+   {
+    "name": "enable_feed",
+    "type": "textbox",
+    "label": "Add feed",
+    "description": "The feed to start using. Normally filled by clicking a row in the catalogue. Harmless to leave filled: adding a feed that is already on is a no-op, and it wins over a stale remove box.",
+    "query": "",
+    "current": {
+     "selected": false,
+     "text": "",
+     "value": ""
+    },
+    "options": [],
+    "hide": 0,
+    "skipUrlSync": false
+   },
+   {
+    "name": "disable_feed",
+    "type": "textbox",
+    "label": "Remove feed",
+    "description": "The feed to stop using; `all` removes every one and empties the router list.",
+    "query": "",
+    "current": {
+     "selected": false,
+     "text": "",
+     "value": ""
+    },
+    "options": [],
+    "hide": 0,
+    "skipUrlSync": false
+   },
+   {
+    "name": "update_feeds",
+    "type": "custom",
+    "label": "Update feeds",
+    "description": "`now` re-downloads every enabled feed. Throttled to ip_reputation.min_update_seconds, because this box is re-sent on every refresh.",
+    "query": "-,now",
+    "multi": false,
+    "includeAll": false,
+    "options": [
+     {
+      "selected": true,
+      "text": "-",
+      "value": "-"
+     },
+     {
+      "selected": false,
+      "text": "now",
+      "value": "now"
+     }
+    ],
+    "current": {
+     "selected": true,
+     "text": "-",
+     "value": "-"
+    },
+    "hide": 0,
+    "skipUrlSync": false
+   }
+  ]
+ },
+ "panels": [
+  {
+   "type": "stat",
+   "title": "IP Reputation",
+   "description": "What the reputation list is doing, worked out by ip-reputation itself. NO FIREWALL RULE is the one to act on: the list is loaded on the router, but no enabled raw/filter rule references it, so it blocks nothing -- add the two rules from the panel below. LOADING means the router has fewer entries than the merged feeds (a first load is one REST call per entry). NOT CONFIGURED is mikrotik.* missing from suricata.properties. With several routers: the worst router decides the state, Entries is the smallest count on any router, and Rules counts all of them -- per router in the Routers table.",
+   "id": 1,
+   "gridPos": {
+    "h": 5,
+    "w": 5,
+    "x": 0,
+    "y": 0
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://ip-reputation:8070/status",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "state_code",
+       "text": "state_code",
+       "type": "number"
+      }
+     ]
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#9ca3af",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "NO ANSWER"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "state_code"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Reputation"
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "NOT CONFIGURED",
+            "color": "#9ca3af",
+            "index": 0
+           },
+           "1": {
+            "text": "UNREACHABLE",
+            "color": "#d03b3b",
+            "index": 1
+           },
+           "2": {
+            "text": "NO FEEDS",
+            "color": "#9ca3af",
+            "index": 2
+           },
+           "3": {
+            "text": "LOADING",
+            "color": "#3b82f6",
+            "index": 3
+           },
+           "4": {
+            "text": "NO FIREWALL RULE",
+            "color": "#ec835a",
+            "index": 4
+           },
+           "5": {
+            "text": "BLOCKING",
+            "color": "#0ca30c",
+            "index": 5
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "orientation": "horizontal",
+    "textMode": "auto",
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false,
+    "text": {
+     "titleSize": 13,
+     "valueSize": 22
+    }
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Entries",
+   "description": "Addresses and networks on the router's list (as of the last reconcile) against what the enabled feeds merge to, after our own and reserved space has been dropped and duplicates across feeds removed. The cap is ip_reputation.max_entries. With several routers: the worst router decides the state, Entries is the smallest count on any router, and Rules counts all of them -- per router in the Routers table.",
+   "id": 2,
+   "gridPos": {
+    "h": 5,
+    "w": 5,
+    "x": 5,
+    "y": 0
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://ip-reputation:8070/status",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "on_router",
+       "text": "on_router",
+       "type": "number"
+      },
+      {
+       "selector": "desired",
+       "text": "desired",
+       "type": "number"
+      }
+     ]
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#9ca3af",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "NO ANSWER"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "on_router"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "On router"
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "#9ca3af",
+           "value": null
+          },
+          {
+           "color": "#3b82f6",
+           "value": 1
+          }
+         ]
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "desired"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Merged"
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "#9ca3af",
+           "value": null
+          },
+          {
+           "color": "#3b82f6",
+           "value": 1
+          }
+         ]
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "orientation": "horizontal",
+    "textMode": "auto",
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false,
+    "text": {
+     "titleSize": 13,
+     "valueSize": 26
+    }
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Firewall Rules",
+   "description": "Enabled rules in /ip/firewall/raw or /filter that reference the list, and which side they match: src (inbound from listed hosts) and dst (outbound to them -- the side that matters for botnet C2 feeds). NONE means the list blocks nothing. With several routers: the worst router decides the state, Entries is the smallest count on any router, and Rules counts all of them -- per router in the Routers table.",
+   "id": 3,
+   "gridPos": {
+    "h": 5,
+    "w": 4,
+    "x": 10,
+    "y": 0
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://ip-reputation:8070/status",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "rules",
+       "text": "rules",
+       "type": "number"
+      },
+      {
+       "selector": "rule_sides",
+       "text": "rule_sides",
+       "type": "string"
+      }
+     ]
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#9ca3af",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "NO ANSWER"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "rules"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Rules"
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "NONE",
+            "color": "#ec835a",
+            "index": 0
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "#ec835a",
+           "value": null
+          },
+          {
+           "color": "#0ca30c",
+           "value": 1
+          }
+         ]
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "rule_sides"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Sides"
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "orientation": "horizontal",
+    "textMode": "auto",
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false,
+    "text": {
+     "titleSize": 13,
+     "valueSize": 22
+    }
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Dropped in Range",
+   "description": "Packets the rules referencing the list dropped over the selected time range, from their RouterOS counters. The only evidence the list is doing anything. NO DATA means ip-reputation is not running or cannot read the rules.",
+   "id": 4,
+   "gridPos": {
+    "h": 5,
+    "w": 5,
+    "x": 14,
+    "y": 0
+   },
+   "datasource": {
+    "type": "influxdb",
+    "uid": "InfluxDB_Flux"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "InfluxDB_Flux"
+     },
+     "query": "import \"array\"\n// rule_packets is already a per-minute delta of the rules' counters, so the\n// sum over the range is what they dropped in it. The -1 row keeps a stopped\n// service from reading as \"nothing to drop\".\ndata = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"ip_reputation_router\" and r._field == \"rule_packets\")\n  |> sum()\n  |> group()\n  |> sum()\nsentinel = array.from(rows: [{_value: -1}])\nunion(tables: [data, sentinel])\n  |> max()\n"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#9ca3af",
+        "value": null
+       },
+       {
+        "color": "#3b82f6",
+        "value": 0
+       }
+      ]
+     },
+     "noValue": "NO ANSWER",
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "-1": {
+         "text": "NO DATA",
+         "color": "#9ca3af",
+         "index": 0
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "orientation": "horizontal",
+    "textMode": "auto",
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false,
+    "text": {
+     "titleSize": 13,
+     "valueSize": 26
+    }
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Feeds Updated",
+   "description": "How long ago the feeds were last downloaded. They refresh every ip_reputation.update_interval_hours on their own; `Update feeds = now` forces it (throttled). A feed whose download fails keeps serving its last good copy and reads ERROR in the table.",
+   "id": 5,
+   "gridPos": {
+    "h": 5,
+    "w": 5,
+    "x": 19,
+    "y": 0
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://ip-reputation:8070/status",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "list_age_seconds",
+       "text": "list_age_seconds",
+       "type": "number"
+      }
+     ]
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#9ca3af",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "NO ANSWER"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "list_age_seconds"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Age"
+       },
+       {
+        "id": "unit",
+        "value": "s"
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "-1": {
+            "text": "NEVER",
+            "color": "#9ca3af",
+            "index": 0
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "#9ca3af",
+           "value": null
+          },
+          {
+           "color": "#0ca30c",
+           "value": 0
+          },
+          {
+           "color": "#fab219",
+           "value": 86400
+          },
+          {
+           "color": "#ec835a",
+           "value": 259200
+          }
+         ]
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "orientation": "horizontal",
+    "textMode": "auto",
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false,
+    "text": {
+     "titleSize": 13,
+     "valueSize": 26
+    }
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Dropped by the Reputation Rules",
+   "id": 6,
+   "description": "Packets dropped by the firewall rules that reference the list (bars), with the number of entries on the router (line, right axis). Flat zero bars with entries loaded and rules present simply means nothing on the list tried to talk to this network. With several routers the bars are the sum of all of them.",
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 5
+   },
+   "datasource": {
+    "type": "influxdb",
+    "uid": "InfluxDB_Flux"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "InfluxDB_Flux"
+     },
+     "query": "import \"array\"\n\n// ~96 buckets whatever the range, floored at the one-minute health tick, and\n// labelled by the start of each bucket -- the same derivation as the Suricata\n// dashboard, so zooming onto a bar selects the drops that drew it.\nspanNs = int(v: v.timeRangeStop) - int(v: v.timeRangeStart)\neveryNs = if spanNs / 96 < 60000000000 then 60000000000 else spanNs / 96\nevery = duration(v: everyNs)\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"ip_reputation_router\" and r._field == \"rule_packets\")\n  |> aggregateWindow(every: every, fn: sum, createEmpty: true, timeSrc: \"_start\")\n  // one series per router: summed per bucket, after the pushed-down window\n  |> group()\n  |> aggregateWindow(every: every, fn: sum, createEmpty: true, timeSrc: \"_start\")\n  |> map(fn: (r) => ({r with _value: if exists r._value then r._value else 0}))\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Dropped packets\"})\n"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "InfluxDB_Flux"
+     },
+     "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"ip_reputation_status\" and r._field == \"on_router\")\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Entries on router\"})\n"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "decimals": 0,
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "#3b82f6"
+     },
+     "custom": {
+      "drawStyle": "bars",
+      "lineWidth": 1,
+      "fillOpacity": 85,
+      "gradientMode": "none",
+      "barAlignment": 1,
+      "showPoints": "never",
+      "axisSoftMin": 0
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Entries on router"
+      },
+      "properties": [
+       {
+        "id": "custom.drawStyle",
+        "value": "line"
+       },
+       {
+        "id": "custom.fillOpacity",
+        "value": 0
+       },
+       {
+        "id": "custom.axisPlacement",
+        "value": "right"
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#9ca3af"
+        }
+       },
+       {
+        "id": "custom.lineWidth",
+        "value": 2
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   }
+  },
+  {
+   "type": "table",
+   "title": "Routers (every router with the ip_reputation role)",
+   "description": "Each router that gets the reputation list (mikrotik.routers, roles including ip_reputation). They are reconciled in parallel, so one that is down or slow holds nobody back, and the tile at the top reads the worst of them: NO FIREWALL RULE if any router lacks a rule referencing the list. Done / To do is the progress of a reconcile in flight; Dropped is the referencing rules' own packet counter.",
+   "id": 12,
+   "gridPos": {
+    "h": 6,
+    "w": 24,
+    "x": 0,
+    "y": 13
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://ip-reputation:8070/routers",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "router",
+       "text": "router",
+       "type": "string"
+      },
+      {
+       "selector": "host",
+       "text": "host",
+       "type": "string"
+      },
+      {
+       "selector": "state_code",
+       "text": "state_code",
+       "type": "number"
+      },
+      {
+       "selector": "version",
+       "text": "version",
+       "type": "string"
+      },
+      {
+       "selector": "on_router",
+       "text": "on_router",
+       "type": "number"
+      },
+      {
+       "selector": "rules",
+       "text": "rules",
+       "type": "number"
+      },
+      {
+       "selector": "rule_sides",
+       "text": "rule_sides",
+       "type": "string"
+      },
+      {
+       "selector": "rule_packets_total",
+       "text": "rule_packets_total",
+       "type": "number"
+      },
+      {
+       "selector": "progress_done",
+       "text": "progress_done",
+       "type": "number"
+      },
+      {
+       "selector": "progress_todo",
+       "text": "progress_todo",
+       "type": "number"
+      },
+      {
+       "selector": "last_result",
+       "text": "last_result",
+       "type": "string"
+      },
+      {
+       "selector": "synced_at",
+       "text": "synced_at",
+       "type": "string"
+      }
+     ]
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "indexByName": {
+       "router": 0,
+       "host": 1,
+       "state_code": 2,
+       "version": 3,
+       "on_router": 4,
+       "rules": 5,
+       "rule_sides": 6,
+       "rule_packets_total": 7,
+       "progress_done": 8,
+       "progress_todo": 9,
+       "last_result": 10,
+       "synced_at": 11
+      },
+      "renameByName": {
+       "router": "Router",
+       "host": "Address",
+       "state_code": "State",
+       "version": "RouterOS",
+       "on_router": "Entries",
+       "rules": "Rules",
+       "rule_sides": "Sides",
+       "rule_packets_total": "Dropped (counter)",
+       "progress_done": "Done",
+       "progress_todo": "To do",
+       "last_result": "Last reconcile",
+       "synced_at": "At"
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "filterable": false
+     },
+     "unit": "none",
+     "decimals": 0,
+     "noValue": "No router has this role"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "State"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 160
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "NOT CONFIGURED",
+            "color": "#9ca3af",
+            "index": 0
+           },
+           "1": {
+            "text": "UNREACHABLE",
+            "color": "#d03b3b",
+            "index": 1
+           },
+           "3": {
+            "text": "LOADING",
+            "color": "#3b82f6",
+            "index": 2
+           },
+           "4": {
+            "text": "NO FIREWALL RULE",
+            "color": "#ec835a",
+            "index": 3
+           },
+           "5": {
+            "text": "BLOCKING",
+            "color": "#0ca30c",
+            "index": 4
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Router"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 110
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "At"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 175
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Rules"
+      },
+      "properties": [
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "NONE",
+            "color": "#ec835a",
+            "index": 0
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Service",
+   "description": "State of ip-reputation itself. READ-ONLY is ip_reputation.control_enabled = false: the tables still render, no click changes anything. WORKING means a download or a reconcile is in flight (a first load can take minutes), so the tables are a refresh behind. DRY RUN means nothing is sent to the router.",
+   "id": 7,
+   "gridPos": {
+    "h": 6,
+    "w": 8,
+    "x": 0,
+    "y": 19
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://ip-reputation:8070/status",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "control_enabled",
+       "text": "control_enabled",
+       "type": "number"
+      },
+      {
+       "selector": "syncing",
+       "text": "syncing",
+       "type": "number"
+      },
+      {
+       "selector": "dry_run",
+       "text": "dry_run",
+       "type": "number"
+      }
+     ]
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#9ca3af",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "NO ANSWER"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "control_enabled"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Actions"
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "READ-ONLY",
+            "color": "#9ca3af",
+            "index": 0
+           },
+           "1": {
+            "text": "WRITABLE",
+            "color": "#0ca30c",
+            "index": 1
+           }
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "syncing"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Service"
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "IDLE",
+            "color": "#0ca30c",
+            "index": 0
+           },
+           "1": {
+            "text": "WORKING",
+            "color": "#3b82f6",
+            "index": 1
+           }
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "dry_run"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Router writes"
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "LIVE",
+            "color": "#0ca30c",
+            "index": 0
+           },
+           "1": {
+            "text": "DRY RUN",
+            "color": "#fab219",
+            "index": 1
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "orientation": "horizontal",
+    "textMode": "auto",
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false,
+    "text": {
+     "titleSize": 13,
+     "valueSize": 18
+    }
+   }
+  },
+  {
+   "type": "text",
+   "title": "How IP reputation blocking works",
+   "id": 8,
+   "gridPos": {
+    "h": 6,
+    "w": 16,
+    "x": 8,
+    "y": 19
+   },
+   "options": {
+    "mode": "markdown",
+    "code": {
+     "language": "plaintext",
+     "showLineNumbers": false,
+     "showMiniMap": false
+    },
+    "content": "**Choose feeds:** click a feed in *Feed Catalogue* to add it, or in *Enabled Feeds* to remove it (`all` in the remove box clears every one, and empties the router list). Feeds are merged smallest first into one address list, `reputation-blocked` by default; an address two feeds share is credited to the smaller one.\n\n**It blocks nothing until the router references the list** -- by hand, on purpose, exactly like the IDS block list:\n`/ip firewall raw add chain=prerouting action=drop src-address-list=reputation-blocked`  \n`/ip firewall raw add chain=prerouting action=drop dst-address-list=reputation-blocked`  \nThe first drops what listed hosts send in, the second stops anything inside reaching them (the botnet C2 feeds are about that one). The tile at the top reads NO FIREWALL RULE until one exists.\n\n**Never blocked, whatever a feed says:** private, reserved, multicast and CGNAT space, `suricata.home_net`, `whitelist.*`, the router and `ip_reputation.never`. *Dropped* in the table is how many entries that removed -- FireHOL level1 really does list 10.0.0.0/8. Entries expire router-side after `ip_reputation.entry_timeout` unless refreshed, so the list fails open if this stack stops.\n\n**Anyone who can view this dashboard can change the feeds** -- the call runs as the datasource, not the viewer. Every change is in the audit table at the bottom."
+   }
+  },
+  {
+   "type": "table",
+   "title": "Enabled Feeds (click one to stop using it)",
+   "description": "What is switched on, straight from ip-reputation -- and this panel performs the change: it carries all three control boxes, so what you see is the state after the action. Entries is what the feed contributes after the filter and the cross-feed dedup; Dropped is what the never-block filter took out. ERROR keeps serving the last good copy; CAPPED means it did not fit in ip_reputation.max_entries.",
+   "id": 9,
+   "gridPos": {
+    "h": 10,
+    "w": 14,
+    "x": 0,
+    "y": 25
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://ip-reputation:8070/apply?enable=${enable_feed}&disable=${disable_feed}&update=${update_feeds}",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "feed",
+       "text": "feed",
+       "type": "string"
+      },
+      {
+       "selector": "state",
+       "text": "state",
+       "type": "string"
+      },
+      {
+       "selector": "raw",
+       "text": "raw",
+       "type": "number"
+      },
+      {
+       "selector": "entries",
+       "text": "entries",
+       "type": "number"
+      },
+      {
+       "selector": "dropped",
+       "text": "dropped",
+       "type": "number"
+      },
+      {
+       "selector": "duplicate",
+       "text": "duplicate",
+       "type": "number"
+      },
+      {
+       "selector": "fetched_at",
+       "text": "fetched_at",
+       "type": "string"
+      },
+      {
+       "selector": "detail",
+       "text": "detail",
+       "type": "string"
+      }
+     ]
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "indexByName": {
+       "feed": 0,
+       "state": 1,
+       "raw": 2,
+       "entries": 3,
+       "dropped": 4,
+       "duplicate": 5,
+       "fetched_at": 6,
+       "detail": 7
+      },
+      "renameByName": {
+       "feed": "Feed",
+       "state": "State",
+       "raw": "In feed",
+       "entries": "Entries",
+       "dropped": "Dropped",
+       "duplicate": "Duplicates",
+       "fetched_at": "Downloaded",
+       "detail": "Detail"
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "filterable": true
+     },
+     "unit": "none",
+     "decimals": 0
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Feed"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 150
+       },
+       {
+        "id": "links",
+        "value": [
+         {
+          "title": "Stop using this feed",
+          "url": "/d/ip-reputation?${__url_time_range}&var-update_feeds=-&var-disable_feed=${__value.raw}&var-enable_feed=",
+          "targetBlank": false
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "State"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 110
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "ok": {
+            "text": "ACTIVE",
+            "color": "#0ca30c",
+            "index": 0
+           },
+           "pending": {
+            "text": "DOWNLOADING",
+            "color": "#3b82f6",
+            "index": 1
+           },
+           "capped": {
+            "text": "CAPPED",
+            "color": "#fab219",
+            "index": 2
+           },
+           "error": {
+            "text": "ERROR",
+            "color": "#d03b3b",
+            "index": 3
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Downloaded"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 175
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "sortBy": [
+     {
+      "displayName": "Feed",
+      "desc": false
+     }
+    ]
+   }
+  },
+  {
+   "type": "table",
+   "title": "Feed Catalogue (click one to use it)",
+   "description": "Every feed ip-reputation knows. The URLs and formats are built in and checked by `selftest.py --feeds`.",
+   "id": 10,
+   "gridPos": {
+    "h": 10,
+    "w": 10,
+    "x": 14,
+    "y": 25
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://ip-reputation:8070/catalog?enable=${enable_feed}&disable=${disable_feed}&update=${update_feeds}",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "feed",
+       "text": "feed",
+       "type": "string"
+      },
+      {
+       "selector": "enabled",
+       "text": "enabled",
+       "type": "number"
+      },
+      {
+       "selector": "title",
+       "text": "title",
+       "type": "string"
+      },
+      {
+       "selector": "about",
+       "text": "about",
+       "type": "string"
+      }
+     ]
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "indexByName": {
+       "feed": 0,
+       "enabled": 1,
+       "title": 2,
+       "about": 3
+      },
+      "renameByName": {
+       "feed": "Feed",
+       "enabled": "On",
+       "title": "Source",
+       "about": "What it lists"
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "filterable": true
+     },
+     "unit": "none",
+     "decimals": 0
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Feed"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 150
+       },
+       {
+        "id": "links",
+        "value": [
+         {
+          "title": "Use this feed",
+          "url": "/d/ip-reputation?${__url_time_range}&var-update_feeds=-&var-enable_feed=${__value.raw}&var-disable_feed=",
+          "targetBlank": false
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "On"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 60
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "",
+            "color": "#9ca3af",
+            "index": 0
+           },
+           "1": {
+            "text": "ON",
+            "color": "#0ca30c",
+            "index": 1
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Source"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 200
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "sortBy": [
+     {
+      "displayName": "Feed",
+      "desc": false
+     }
+    ]
+   }
+  },
+  {
+   "type": "table",
+   "title": "Feed Changes (audit)",
+   "id": 11,
+   "description": "Every feed switched on or off, and every forced update, from ip-reputation's own audit write. It records when, never who. Detail carries a note if the call was made by hand with `&note=...`.",
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 35
+   },
+   "datasource": {
+    "type": "influxdb",
+    "uid": "InfluxDB_Flux"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "InfluxDB_Flux"
+     },
+     "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"ip_reputation_control\" and r._field == \"detail\")\n  |> keep(columns: [\"_time\", \"action\", \"feed\", \"_value\"])\n  |> group()\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 200)\n"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "indexByName": {
+       "_time": 0,
+       "action": 1,
+       "feed": 2,
+       "_value": 3
+      },
+      "renameByName": {
+       "_time": "Time",
+       "action": "Change",
+       "feed": "Feed",
+       "_value": "Detail"
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "filterable": true
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Time"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 190
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Change"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 150
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "enable": {
+            "text": "FEED ON",
+            "color": "#0ca30c",
+            "index": 0
+           },
+           "disable": {
+            "text": "FEED OFF",
+            "color": "#fab219",
+            "index": 1
+           },
+           "update": {
+            "text": "UPDATE",
+            "color": "#3b82f6",
+            "index": 2
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Feed"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 160
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "sortBy": [
+     {
+      "displayName": "Time",
+      "desc": true
+     }
+    ]
+   }
+  }
+ ]
+}

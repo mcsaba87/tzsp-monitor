@@ -1,0 +1,58 @@
+apiVersion: 1
+
+# One provider per folder, one folder per subdirectory. Grafana lists folders
+# alphabetically, so the number is what puts them in reading order: the
+# at-a-glance boards first, then traffic analysis, then the IDS, then DNS.
+# Inside a folder the order is alphabetical again -- the home page
+# (/opt/tzsp/home.json) is where the boards are listed in a deliberate order.
+#
+# Folder uids are pinned for the same reason dashboard uids are: so a folder
+# has the same URL on every instance. The generated Sites Overview joins
+# '1 · Overview' through a provider sites.sh appends.
+#
+# The paths are the mounted directory, not sites.sh's /tmp copy, so dashboard
+# edits are picked up live.
+providers:
+  - name: 'Overview'
+    orgId: 1
+    folder: '1 · Overview'
+    folderUid: tzsp-overview
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    options:
+      path: /etc/grafana/provisioning/dashboards/overview
+      foldersFromFilesStructure: false
+
+  - name: 'Traffic'
+    orgId: 1
+    folder: '2 · Traffic Analysis'
+    folderUid: tzsp-traffic
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    options:
+      path: /etc/grafana/provisioning/dashboards/traffic
+      foldersFromFilesStructure: false
+
+  - name: 'Security'
+    orgId: 1
+    folder: '3 · Security'
+    folderUid: tzsp-security
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    options:
+      path: /etc/grafana/provisioning/dashboards/security
+      foldersFromFilesStructure: false
+
+  - name: 'DNS'
+    orgId: 1
+    folder: '4 · DNS'
+    folderUid: tzsp-dns
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    options:
+      path: /etc/grafana/provisioning/dashboards/dns
+      foldersFromFilesStructure: false

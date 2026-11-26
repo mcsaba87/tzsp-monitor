@@ -1,0 +1,1172 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "uid": "dns-activity",
+  "links": [],
+  "liveNow": true,
+  "templating": {
+    "list": [
+      {
+        "name": "site",
+        "type": "datasource",
+        "label": "Site",
+        "description": "Which tzsp-monitor instance these panels read. Remote sites are the REMOTE_SITE_* lines in properties.yml of the instance serving this Grafana; each is a datasource pointed at that site's own InfluxDB, so nothing is copied between sites. Controls never follow this box: rule suppression and reverse DNS only ever act on the local site, and are inert while another site is selected.",
+        "query": "influxdb",
+        "regex": "",
+        "current": {
+          "selected": false,
+          "text": "InfluxDB_Flux",
+          "value": "InfluxDB_Flux"
+        },
+        "options": [],
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1,
+        "skipUrlSync": false
+      },
+      {
+        "name": "cidr",
+        "type": "textbox",
+        "label": "CIDR filter",
+        "description": "Restrict the panels to clients in this range, e.g. 10.12.0.0/16 or a bare IP. Empty means no filter. Prefix lengths other than /8, /16, /24 and /32 round down to the enclosing octet boundary, so /20 behaves as /16. The DNS Monitor tile ignores it: it describes the pipeline, not the traffic.",
+        "hide": 0,
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "DNS Activity & Blocked Lookups",
+  "description": "Who looked up what, and what the router refused. The blocked half comes from dns-monitor (Suricata's DNS events over a unix socket); the request half comes from the collector's server_name tag and works over history from before dns-monitor existed.",
+  "tags": [
+    "dns",
+    "filtering",
+    "tzsp-monitor"
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "version": 1,
+  "weekStart": "",
+  "panels": [
+    {
+      "type": "stat",
+      "id": 1,
+      "title": "DNS Monitor",
+      "description": "Whether this dashboard's data is being collected at all. Read from state_code, which dns-monitor computes -- a value mapping can render the word but cannot work out which case applies. WATCHING means Suricata is connected AND DNS events are arriving. NO DNS EVENTS is the one that used to read as health: Suricata dials this socket when the *engine* starts, so being connected proves nothing about the stream, and a mirror that carries no DNS -- or only one direction of it, which with `requests: no` logs nothing at all -- leaves every panel below empty under a green tile. Check tzsp-decap's pps first. NO SURICATA means nothing is connected to the socket (check the second eve-log output in suricata.yaml, and that the suricata container has the suricata-dns volume -- adding a volume needs `up -d suricata`, a restart keeps the old mounts). NOT RUNNING is the -1 sentinel: without it a stopped service and a network with no DNS on it would be the same blank tile; it also reads NOT RUNNING over a range that predates state_code. Describes the pipeline, not the traffic, so it ignores the CIDR box.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\n// state_code, not `connected`: Suricata connects at engine start, so\n// `connected` is 1 the whole time a mirror carrying no DNS is starving\n// this dashboard. The service decides which of the three it is.\nseen = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"dns_monitor\" and r._field == \"state_code\")\n  |> last()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, array.from(rows: [{_value: -1}])])\n  |> group()\n  |> max()\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "NOT RUNNING",
+                  "color": "#d03b3b",
+                  "index": 0
+                },
+                "0": {
+                  "text": "NO SURICATA",
+                  "color": "#ec835a",
+                  "index": 1
+                },
+                "1": {
+                  "text": "NO DNS EVENTS",
+                  "color": "#fab219",
+                  "index": 2
+                },
+                "2": {
+                  "text": "WATCHING",
+                  "color": "#0ca30c",
+                  "index": 3
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 38
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 2,
+      "title": "Lookups",
+      "description": "Every DNS response Suricata saw in range, after the CIDR filter. Counted per client between flushes rather than stored per query -- one point per lookup would be a series write per DNS packet.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored\n// prefix regex, the only form InfluxDB pushes down to storage. Prefix lengths\n// other than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary,\n// so the range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nseen = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"dns_query\" and r._field == \"count\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe)\n  |> group()\n  |> sum()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> max()\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 0,
+                "result": {
+                  "text": "NONE",
+                  "color": "#9ca3af",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 38
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 3,
+      "title": "Blocked",
+      "description": "Lookups the router refused -- an A/AAAA answer of 0.0.0.0 or ::, which is what RouterOS returns for a name on an /ip/dns/adlist. Click the tile for the per-host, per-name breakdown below.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored\n// prefix regex, the only form InfluxDB pushes down to storage. Prefix lengths\n// other than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary,\n// so the range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nseen = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"dns_query\" and r._field == \"count\")\n  |> filter(fn: (r) => r.result == \"blocked\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe)\n  |> group()\n  |> sum()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> max()\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 0,
+                "result": {
+                  "text": "NONE",
+                  "color": "#0ca30c",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 1,
+                "to": 100000000000,
+                "result": {
+                  "color": "#d03b3b",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 38
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 4,
+      "title": "Blocked Share",
+      "description": "Blocked lookups as a share of all of them. A filter that is working at all reads a few percent here; a flat zero with categories enabled on the DNS Web Filter dashboard means the clients are not using the router as their resolver, or DNS-over-HTTPS is going round it.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored\n// prefix regex, the only form InfluxDB pushes down to storage. Prefix lengths\n// other than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary,\n// so the range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nbase = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"dns_query\" and r._field == \"count\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe)\n\n// Two sum()s rather than one reduce() over the raw points: sum pushes down\n// into InfluxDB and reduce does not, so the only rows reduce ever sees are\n// the two below. The seed row is what keeps the table non-empty on a network\n// with no DNS at all -- reduce over nothing yields nothing, and a blank tile\n// and a working one look identical.\ntotal = base |> group() |> sum()\n  |> map(fn: (r) => ({k: \"total\", _value: float(v: r._value)}))\nblocked = base\n  |> filter(fn: (r) => r.result == \"blocked\")\n  |> group() |> sum()\n  |> map(fn: (r) => ({k: \"blocked\", _value: float(v: r._value)}))\nseed = array.from(rows: [{k: \"seed\", _value: 0.0}])\n\nunion(tables: [total, blocked, seed])\n  |> group()\n  |> reduce(identity: {total: 0.0, blocked: 0.0}, fn: (r, accumulator) => ({\n      total: accumulator.total + (if r.k == \"total\" then r._value else 0.0),\n      blocked: accumulator.blocked + (if r.k == \"blocked\" then r._value else 0.0)}))\n  |> map(fn: (r) => ({r with _value: if r.total > 0.0\n                                     then r.blocked / r.total * 100.0\n                                     else -1.0}))\n  |> keep(columns: [\"_value\"])\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": -1,
+                "to": -0.5,
+                "result": {
+                  "text": "NO DNS",
+                  "color": "#9ca3af",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 38
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 5,
+      "title": "NXDOMAIN",
+      "description": "Lookups that resolved to nothing. Not the filter -- a blocked name answers 0.0.0.0, not NXDOMAIN -- so a host climbing here on its own is typically a typo storm, a dead search domain, or malware walking through generated names.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored\n// prefix regex, the only form InfluxDB pushes down to storage. Prefix lengths\n// other than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary,\n// so the range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nseen = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"dns_query\" and r._field == \"count\")\n  |> filter(fn: (r) => r.result == \"nxdomain\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe)\n  |> group()\n  |> sum()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> max()\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 0,
+                "result": {
+                  "text": "NONE",
+                  "color": "#0ca30c",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 38
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 6,
+      "title": "Clients Asking",
+      "description": "Distinct hosts that made a DNS lookup in range. Counted as the number of series rather than with distinct(), so the work stays inside InfluxDB.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\nimport \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored\n// prefix regex, the only form InfluxDB pushes down to storage. Prefix lengths\n// other than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary,\n// so the range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nseen = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"dns_query\" and r._field == \"count\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\"])\n  |> count()\n  |> group()\n  |> count()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> max()\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 0,
+                "result": {
+                  "text": "NONE",
+                  "color": "#9ca3af",
+                  "index": 0
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 38
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 7,
+      "title": "DNS Lookups over Time by Result",
+      "description": "Stacked lookups per bucket, split by what the answer was. Bars are labelled with the START of their window, so zooming onto one selects the lookups that drew it. Colours are pinned per result with overrides, never palette-classic, so hiding one series cannot repaint the others.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored\n// prefix regex, the only form InfluxDB pushes down to storage. Prefix lengths\n// other than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary,\n// so the range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\n// Derived from the time range rather than from v.windowPeriod (which follows\n// the panel's pixel width) and rather than pinned (which makes zooming inert):\n// ~96 buckets however far you zoom, floored at the service's own flush\n// interval, below which there is nothing finer to show.\nspanNs = int(v: v.timeRangeStop) - int(v: v.timeRangeStart)\neveryNs = if spanNs / 96 < 30000000000 then 30000000000 else spanNs / 96\nevery = duration(v: everyNs)\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"dns_query\" and r._field == \"count\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe)\n  |> aggregateWindow(every: every, fn: sum, timeSrc: \"_start\", createEmpty: false)\n  |> group(columns: [\"result\"])\n  |> aggregateWindow(every: every, fn: sum, timeSrc: \"_start\", createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"result\"])\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "gradientMode": "none",
+            "barAlignment": 1,
+            "showPoints": "never",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*ok.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3b82f6"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "resolved"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*blocked.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d03b3b"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "blocked (0.0.0.0)"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*nxdomain.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#fab219"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "NXDOMAIN"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*error.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9ca3af"
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "SERVFAIL / other"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "barchart",
+      "id": 8,
+      "title": "Top Blocked Domains",
+      "description": "Which names the router refused, across every client. One hue: the bars encode one magnitude, and colouring them differently would imply a category that is not there. `(capped)` is not a domain -- it is the overflow bucket for a pass that saw more distinct blocked names than dns_monitor.max_names, so the total stays right when the detail cannot.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored\n// prefix regex, the only form InfluxDB pushes down to storage. Prefix lengths\n// other than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary,\n// so the range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"dns_block\" and r._field == \"count\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe)\n  |> group(columns: [\"qname\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 20)\n  |> keep(columns: [\"qname\", \"_value\"])\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#d03b3b"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "axisPlacement": "auto",
+            "gradientMode": "none"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xField": "qname",
+        "showValue": "auto",
+        "stacking": "none",
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "type": "table",
+      "id": 9,
+      "title": "Hosts Hitting Blocked Domains",
+      "description": "The answer to \"who\". RouterOS's own per-list match-count says how many names a category blocked but never which client asked, and this is the only place that does. `Names` is the number of distinct blocked domains that host asked for, which is what separates one person clicking an ad link from something walking a list.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored\n// prefix regex, the only form InfluxDB pushes down to storage. Prefix lengths\n// other than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary,\n// so the range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nbase = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"dns_block\" and r._field == \"count\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\", \"qname\"])\n  |> sum()\n\n// Both halves are pushdown aggregates over the same grouped table; the\n// per-row work happens on the handful of rows that survive.\nhits = base |> group(columns: [\"src_ip\"]) |> sum()\n  |> map(fn: (r) => ({src_ip: r.src_ip, k: \"hits\", v: r._value}))\nnames = base |> group(columns: [\"src_ip\"]) |> count()\n  |> map(fn: (r) => ({src_ip: r.src_ip, k: \"names\", v: r._value}))\n\nunion(tables: [hits, names])\n  |> group()\n  |> pivot(rowKey: [\"src_ip\"], columnKey: [\"k\"], valueColumn: \"v\")\n  |> sort(columns: [\"hits\"], desc: true)\n  |> limit(n: 50)\n  |> keep(columns: [\"src_ip\", \"hits\", \"names\"])\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "src_ip": 0,
+              "hits": 1,
+              "names": 2
+            },
+            "renameByName": {
+              "src_ip": "Client",
+              "hits": "Blocked lookups",
+              "names": "Names"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Blocked lookups"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d03b3b"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Blocked lookups",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "id": 10,
+      "title": "Blocked Lookups: which host asked for which name",
+      "description": "One row per client and blocked domain, most recent hit included -- the table to read when somebody says a site stopped working. If the name should not be blocked, the category holding it is switched off on the DNS Web Filter dashboard; this table does not change anything by itself.",
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored\n// prefix regex, the only form InfluxDB pushes down to storage. Prefix lengths\n// other than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary,\n// so the range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nbase = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"dns_block\" and r._field == \"count\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\", \"qname\"])\n\n// sum() and last() both push down; the union/pivot below runs on one row per\n// pair, not on the raw points.\nhits = base |> sum()\n  |> map(fn: (r) => ({src_ip: r.src_ip, qname: r.qname, k: \"hits\", v: r._value}))\nseen = base |> last()\n  |> map(fn: (r) => ({src_ip: r.src_ip, qname: r.qname, k: \"seen\", v: int(v: r._time)}))\n\nunion(tables: [hits, seen])\n  |> group()\n  |> pivot(rowKey: [\"src_ip\", \"qname\"], columnKey: [\"k\"], valueColumn: \"v\")\n  |> sort(columns: [\"hits\"], desc: true)\n  |> limit(n: 200)\n  // `{r with ...}` and not a fresh record: a map that builds a brand-new\n  // record after a pivot silently returns an empty frame.\n  |> map(fn: (r) => ({r with last_seen: time(v: r.seen)}))\n  |> keep(columns: [\"src_ip\", \"qname\", \"hits\", \"last_seen\"])\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "src_ip": 0,
+              "qname": 1,
+              "hits": 2,
+              "last_seen": 3
+            },
+            "renameByName": {
+              "src_ip": "Client",
+              "qname": "Blocked name",
+              "hits": "Lookups",
+              "last_seen": "Last seen"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Client"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 160
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Lookups"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last seen"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 190
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Lookups",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "id": 11,
+      "title": "Most Requested Names (all DNS, from the flow records)",
+      "description": "Every DNS request, not just the refused ones -- and it comes from the collector, not from dns-monitor. nfstream fills `server_name` from the DNS query as well as from TLS SNI, so `network_flow` has had who asked for what all along, with full fidelity and retroactively. Recording the same names a second time from the DNS stream would double the cardinality to learn nothing. mDNS is included because it is on the same tag and reads as DNS on the wire; it never reaches the router, so it is never blocked.",
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 34
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored\n// prefix regex, the only form InfluxDB pushes down to storage. Prefix lengths\n// other than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary,\n// so the range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.service == \"dns\" or r.service == \"mdns\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  // Legacy points written before the tag existed surface as an empty value.\n  |> filter(fn: (r) => exists r.server_name and r.server_name != \"\"\n                       and r.server_name != \"none\")\n  |> group(columns: [\"server_name\", \"service\"])\n  |> count()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 50)\n  |> keep(columns: [\"server_name\", \"service\", \"_value\"])\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "server_name": 0,
+              "service": 1,
+              "_value": 2
+            },
+            "renameByName": {
+              "server_name": "Name",
+              "service": "Protocol",
+              "_value": "Flows"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Protocol"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Flows"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3b82f6"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Flows",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "id": 12,
+      "title": "Who Asked for What (all DNS, from the flow records)",
+      "description": "The same flow records, kept per client. Use the CIDR box or the table's column filter to narrow it to one host; for a single machine's whole story the Host Drilldown dashboard is the better tool.",
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 34
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Same helper as the traffic dashboards: the CIDR box becomes an anchored\n// prefix regex, the only form InfluxDB pushes down to storage. Prefix lengths\n// other than /8, /16, /24 and /32 round DOWN to the enclosing octet boundary,\n// so the range can be wider than typed -- never narrower.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.service == \"dns\" or r.service == \"mdns\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> filter(fn: (r) => exists r.server_name and r.server_name != \"\"\n                       and r.server_name != \"none\")\n  |> group(columns: [\"src_ip\", \"server_name\"])\n  |> count()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 200)\n  |> keep(columns: [\"src_ip\", \"server_name\", \"_value\"])\n",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "src_ip": 0,
+              "server_name": 1,
+              "_value": 2
+            },
+            "renameByName": {
+              "src_ip": "Client",
+              "server_name": "Name",
+              "_value": "Flows"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Client"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 160
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Flows"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Flows",
+            "desc": true
+          }
+        ]
+      }
+    }
+  ]
+}

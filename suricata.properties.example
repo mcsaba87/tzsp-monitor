@@ -1,0 +1,965 @@
+# tzsp-monitor IDS property file -- template.
+#
+#   cp suricata.properties.example suricata.properties
+#   $EDITOR suricata.properties            # at minimum: mikrotik.host/user/password
+#   docker compose up -d
+#
+# The real file is git-ignored, and it is a separate file from properties.yml on
+# purpose: properties.yml is loaded into Grafana's environment with `env_file`,
+# and router credentials have no business being visible there. This one is
+# mounted read-only into mikrotik-responder (which parses all of it), into
+# rule-control (rule_control.*), into dns-filter (dns_filter.* plus the shared
+# mikrotik.* credentials), into pcap-dump (pcap_dump.*), into ip-reputation
+# (ip_reputation.*, mikrotik.*, whitelist.* and suricata.home_net), into
+# arp-watch (arp_watch.*, and the router addresses -- no credentials) and into
+# suricata (suricata.home_net only).
+#
+# Format: `key = value`, one per line. A `#` starts a comment only at the
+# beginning of a line, so a password may contain `#`. Values are not quoted;
+# leading/trailing whitespace is stripped.
+#
+# The stack starts without this file: Suricata still runs and alerts still reach
+# the dashboard. Only the router blocking is skipped, and the responder says so
+# in its log.
+
+
+# ============================================================================
+# Mikrotik router -- RouterOS REST API
+# ============================================================================
+# Requires RouterOS 7.1 or newer with the REST API reachable, i.e. one of
+#   /ip service enable www-ssl     (https, needs a certificate on the router)
+#   /ip service enable www         (http -- only over a trusted management path)
+#
+# Give the account the least privilege that still works. A group with
+# policy=api,rest-api,read,write is enough; it does not need ssh/ftp/telnet:
+#   /user group add name=ids policy=api,rest-api,read,write
+#   /user add name=ids-responder group=ids password=... address=<responder-net>
+
+mikrotik.enabled = true
+mikrotik.host = 192.168.88.1
+mikrotik.scheme = https
+mikrotik.port = 443
+mikrotik.user = ids-responder
+mikrotik.password =
+
+# Routers almost always present a self-signed certificate, so verification is
+# off by default. Turn it on if you have installed a trusted certificate --
+# without it, this connection is only as safe as the path to the router.
+mikrotik.verify_tls = false
+
+# The address list entries are written to. Nothing here creates a firewall rule:
+# the list only becomes a block once you reference it, e.g.
+#   /ip firewall raw add chain=prerouting action=drop src-address-list=suricata-blocked
+#   /ip firewall raw add chain=prerouting action=drop dst-address-list=suricata-blocked
+# Doing that step by hand is deliberate -- it keeps a misconfigured responder
+# from taking the network down.
+mikrotik.address_list = suricata-blocked
+
+# RouterOS-side expiry for each entry, in RouterOS duration syntax (1h, 30m,
+# 1d). Leave empty for permanent entries. An expiring entry is strongly
+# preferred: it fails open if this stack ever stops running.
+mikrotik.timeout = 1h
+
+# Prefix for the entry comment. The signature that triggered the block and the
+# timestamp are appended, so an operator on the router can see why an address
+# is listed.
+mikrotik.comment_prefix = suricata
+
+# Do not re-send an address that is already listed more often than this (s).
+# A repeat within the window refreshes the RouterOS timeout instead.
+mikrotik.refresh_seconds = 300
+
+# Per-request HTTP timeout (s) and how often to probe the API for the
+# "Router API" tile on the dashboard (s; 0 disables the probe).
+mikrotik.request_timeout = 5
+mikrotik.health_interval = 60
+
+# Log what would be sent, change nothing on the router. Useful for the first
+# day of running against real traffic.
+mikrotik.dry_run = false
+
+# --- More than one router ---------------------------------------------------
+# Everything above is the first router, named here (it is the `router` tag on
+# the dashboards). List more in mikrotik.routers; each one's keys are the same
+# ones prefixed with its name, and any it does not set fall back to the
+# unprefixed value -- so a second router usually needs only a host and a
+# password. `host` and `roles` are never inherited.
+#
+# Every block, quarantine, adlist and reputation write goes to every router
+# that has the role, each on its own worker, so an unreachable router only
+# delays itself. The dashboard tiles show the worst router; each control
+# dashboard has a Routers table with every one.
+#
+# Roles: block (the IDS block list), quarantine, dns_filter (the adlists),
+# ip_reputation, scanners. Empty = all of them.
+mikrotik.name = main
+mikrotik.roles =
+mikrotik.routers =
+#mikrotik.routers = edge2, branch
+#mikrotik.edge2.host = 10.2.0.1
+#mikrotik.edge2.password = ...
+#   A router that reaches this host by another address than the first one:
+#mikrotik.edge2.dns_filter_base_url = http://10.2.0.10:8041
+#mikrotik.branch.host = 10.3.0.1
+#mikrotik.branch.user = ids-branch
+#mikrotik.branch.password = ...
+#   A branch router that only enforces the IDS block list:
+#mikrotik.branch.roles = block
+
+
+# ============================================================================
+# Whitelist -- networks and addresses that are never blocked
+# ============================================================================
+# These are still shown on the dashboard (tagged blocked=whitelisted), because
+# an attack between two internal hosts is exactly what you want to see. The
+# whitelist only stops the responder from touching the router for them.
+#
+# Keep your own address space here. Blocking your own gateway or the monitoring
+# host is the one mistake in this stack you cannot undo remotely.
+#
+# Comma-separated CIDRs; IPv6 is supported. Unspecified, loopback, link-local,
+# multicast and reserved addresses are refused regardless of this list.
+whitelist.networks = 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 127.0.0.0/8, ::1/128, fe80::/10, fc00::/7
+
+# Individual extras, e.g. an upstream resolver or a scanner you run yourself.
+whitelist.ips =
+
+
+# ============================================================================
+# Which alerts are allowed to trigger a block
+# ============================================================================
+# Suricata severity: 1 = most severe, 4 = informational. 2 covers the
+# ET Open categories that indicate an actual compromise or attack; 3 pulls in a
+# lot of policy noise, so raise this only after watching the dashboard first.
+block.max_severity = 2
+
+# Require this many qualifying alerts from the same address inside the window
+# before the router is touched. 1 blocks on a single alert; 3-5 over a few
+# minutes is a much better trade against false positives.
+block.min_alerts = 3
+block.window_seconds = 300
+
+# Which endpoint of the alert to block:
+#   external - whichever side is not whitelisted; the source if neither is
+#              (the usual choice)
+#   src      - always the source address
+#   dst      - always the destination address
+#   both     - both endpoints
+block.direction = external
+
+# Never block on these. Signatures are matched as a case-insensitive regular
+# expression against the signature text; sids are exact and comma-separated.
+block.ignore_signatures =
+block.ignore_sids = 9000001
+
+# Alerts older than this when they are read are still shipped to InfluxDB with
+# their original timestamp, but do not trigger a block. This is what keeps a
+# restart from replaying yesterday's alerts onto the router.
+block.max_age_seconds = 300
+
+
+# ============================================================================
+# Quarantine -- cutting off an INTERNAL host that looks compromised
+# ============================================================================
+# The block list above is for the outside: whitelist.networks keeps every
+# internal address off it, rightly. This is the other half -- a laptop that
+# trips a C2/trojan/miner signature goes on its own address list. Like the
+# block list it does nothing until you reference it on the router; this pair
+# cuts a quarantined host off from everything except the router itself (so it
+# still gets DNS and DHCP), connections already open included:
+#   /ip firewall raw add chain=prerouting action=drop src-address-list=suricata-quarantine dst-address-type=!local
+#   /ip firewall raw add chain=prerouting action=drop dst-address-list=suricata-quarantine src-address-type=!local
+# Add an accept rule above them for a helpdesk or remediation server if you
+# have one. `python3 install.py --check` reports whether the rules exist.
+quarantine.enabled = true
+quarantine.list = suricata-quarantine
+# Router-side expiry: a host that is still infected re-alerts and goes back.
+quarantine.timeout = 4h
+
+# Which addresses count as internal. Empty = suricata.home_net.
+quarantine.networks =
+# Never quarantined, whatever they trip: servers, the monitoring host, anything
+# whose loss takes others down with it. mikrotik.host and whitelist.ips are
+# always added. Comma-separated IPs/CIDRs.
+quarantine.never =
+
+# The compromise gate. Severity, classtype AND signature must all match; an
+# empty text gate is not checked. Both are on by default because each alone
+# lets in alerts it should not: ET MALWARE includes adware/PUP rules, and the
+# odd ET INFO rule carries the trojan classtype.
+quarantine.max_severity = 2
+quarantine.categories = A Network Trojan was detected, Malware Command and Control Activity Detected, Domain Observed Used for C2 Detected, Crypto Currency Mining Activity Detected
+quarantine.signatures = ^ET (MALWARE|CNC|TROJAN|MOBILE_MALWARE|COINMINER)\b
+# Alerts from the same host within the window before it is quarantined.
+quarantine.min_alerts = 2
+quarantine.window_seconds = 3600
+# Hard cap on NEW quarantines per rolling hour -- the backstop against a
+# misfiring rule cutting off an office. Refreshing a host already in
+# quarantine does not count. Alerts it stopped read `quarantine-capped`.
+quarantine.max_per_hour = 3
+
+
+# ============================================================================
+# Domain blocking -- the name a compromise alert points at
+# ============================================================================
+# The domain in such an alert (DNS query, TLS SNI, HTTP Host) goes on
+# dns-filter's blacklist with an expiry, so the C2 is unreachable by name for
+# every client that uses the router as resolver -- C2s change IPs far more
+# often than names. Needs dns-filter, with filtering switched on there.
+# dns-filter refuses anything its whitelist covers, and never touches an entry
+# someone added by hand. The entries show in the Blacklist table as AUTOMATIC.
+domain_block.enabled = true
+# How long an entry lives (RouterOS duration syntax). A repeat alert after
+# refresh_seconds pushes the expiry out again.
+domain_block.ttl = 1d
+domain_block.refresh_seconds = 3600
+# Same gate as the quarantine, plus phishing.
+domain_block.max_severity = 2
+domain_block.categories = A Network Trojan was detected, Malware Command and Control Activity Detected, Domain Observed Used for C2 Detected, Crypto Currency Mining Activity Detected, Possible Social Engineering Attempted
+domain_block.signatures = ^ET (MALWARE|CNC|TROJAN|MOBILE_MALWARE|COINMINER|PHISHING)\b
+# Alerts naming the same domain (from any host) within the window. 1 acts on
+# the first sighting.
+domain_block.min_alerts = 2
+domain_block.window_seconds = 3600
+domain_block.max_per_hour = 20
+# Shared platforms malware abuses rather than owns: a C2 over drive.google.com
+# is real, and blacklisting drive.google.com for a day is an outage. Suffix
+# match. Setting this REPLACES the built-in list (google.com, microsoft.com,
+# github.com, dropbox.com, discord.com, telegram.org, cloudflare.com, ...).
+#domain_block.never = google.com, microsoft.com, github.com
+
+
+# ============================================================================
+# Port scanners -- their own address list
+# ============================================================================
+# Two sources, one list: the Port Scanners dashboard's flow verdict (a source
+# with 20+ targets or 5+ services whose connections under 20% complete), run
+# by the responder every interval over the last window_minutes, and sources
+# that keep tripping ET/GPL SCAN signatures. Written to every router with the
+# `scanners` role. Like every list here it blocks nothing until referenced:
+#   /ip firewall raw add chain=prerouting action=drop src-address-list=port-scanners
+# The Port Scanners dashboard shows what was listed, and why.
+scanners.enabled = true
+scanners.list = port-scanners
+scanners.timeout = 1d
+# external: only sources outside suricata.home_net / whitelist.networks (the
+# internet's background scanning). all: internal scanners too -- then add
+# dst-address-type=!local to the rule, as for the quarantine, and list your
+# own vulnerability scanners in scanners.never.
+scanners.scope = external
+# Never listed: routers and whitelist.ips always, plus these IPs/CIDRs.
+scanners.never =
+# The flow verdict: how often, over how long, and the attempt floor (the
+# dashboard's "Min. attempts" box -- same meaning, over this window).
+scanners.interval_seconds = 300
+scanners.window_minutes = 15
+scanners.min_attempts = 50
+scanners.max_candidates = 200
+# The alert source: these signatures, this many times within the window.
+# Empty signatures = flow verdict only.
+scanners.alert_signatures = ^(ET|GPL) SCAN\b
+scanners.alert_min_alerts = 2
+scanners.alert_window_seconds = 600
+# Re-send (refresh the router timeout) at most this often per source.
+scanners.refresh_seconds = 3600
+# Hard cap on NEW listings per rolling hour, both sources together.
+scanners.max_per_hour = 100
+
+
+# ============================================================================
+# Suricata
+# ============================================================================
+# HOME_NET for the rules. Normally the same address space as
+# whitelist.networks; rules use it to tell "inbound attack" from "outbound
+# compromise", so getting it wrong silently halves the ruleset's usefulness.
+# Square brackets and no spaces -- this is RouterOS-unrelated Suricata syntax.
+suricata.home_net = [10.0.0.0/8,172.16.0.0/12,192.168.0.0/16]
+
+
+# ============================================================================
+# Rule control -- suppressing noisy rules from the Grafana dashboard
+# ============================================================================
+# The rule-control service turns a click on a sid in the Suricata dashboard
+# into a `suppress` line in threshold.config plus a live ruleset reload, and
+# the same click in reverse restores the rule.
+#
+# This is a write path reachable from a read-only dashboard. Grafana's Infinity
+# datasource makes the call server-side with the *datasource's* identity, so
+# Grafana's own permissions do not gate it: anyone who can view the dashboard
+# can turn a detection off. Set this to false wherever that is not acceptable
+# -- the panel then only lists what is already suppressed, and both the disable
+# and the re-enable clicks become no-ops.
+rule_control.enabled = true
+
+# Refuse to suppress any more rules once this many are off. Silencing whatever
+# is noisy today is how an IDS quietly stops detecting anything, and nothing
+# else in the stack notices; the cap forces someone to review the list instead.
+# Every suppression line counts, including ones scoped to a single source or
+# destination (`<sid>@src:<ip>`). Re-enabling is always allowed, whatever this
+# is set to.
+rule_control.max_disabled = 200
+
+
+# ============================================================================
+# Disk ceiling -- Suricata's logs and InfluxDB's retention
+# ============================================================================
+# The disk-guard service is the only thing in this stack that deletes data, and
+# these keys are the whole policy. It exists because two writers here have no
+# upper bound of their own: Suricata appends to eve.json forever (its
+# `rotate-interval: day` is measured inert on 8.0.6 -- one file held 14 days and
+# 105 MB), and the InfluxDB bucket is created with *infinite* retention. A full
+# disk stops the capture, the responder, the router writes and Grafana at once.
+#
+# Sizes take a binary suffix: 512M, 2G. A bare number is bytes.
+#
+# Turning this off makes the disk unbounded again. It does not make the guard
+# read-only -- there is nothing here a dashboard can click -- so the only reason
+# is that something outside this stack already bounds the disk.
+disk_guard.enabled = true
+
+# How often the whole policy is re-evaluated (s). Every limit below is checked
+# on every pass, so lowering this only makes the reaction faster, not stricter.
+disk_guard.interval_seconds = 60
+
+# The ceiling, as `df` prints it. At or above this the guard starts deleting:
+# rotated logs oldest-first, then -- only if that is not enough -- it cuts the
+# InfluxDB retention a step at a time. It reclaims down to the *target*, not to
+# the ceiling: stopping at the ceiling would put the next pass back over it and
+# delete something every minute forever. warn is only a dashboard colour.
+disk_guard.max_disk_percent = 90
+disk_guard.target_disk_percent = 85
+disk_guard.warn_disk_percent = 80
+
+# Everything in /var/log/suricata: eve.json, suricata.log and every rotation of
+# them. This is the ceiling on the log volume when there is plenty of free disk;
+# what actually applies is this or whatever still fits under target_disk_percent,
+# whichever is smaller, recomputed every pass. So raising it asks for more alert
+# history and gets it only while there is room for it.
+disk_guard.logs_max_bytes = 2G
+
+# When the live files reach these sizes they are rotated -- renamed, then
+# Suricata is asked to reopen its log files, which is the only safe way to
+# rotate a file another process holds open. Rotating frees nothing by itself; it
+# turns unbounded growth into a file the budgets above are allowed to delete.
+disk_guard.eve_max_bytes = 512M
+disk_guard.suricata_log_max_bytes = 32M
+
+# A rotation younger than this is never deleted to satisfy the byte budget: the
+# responder may still be reading it, and alerts it has not read are alerts that
+# never reach the dashboard. The disk *ceiling* ignores it -- a full disk costs
+# more than the tail of one file.
+disk_guard.min_keep_seconds = 300
+
+# Rotations are also deleted once they are this old, whatever the byte budget
+# says. 0 keeps them until the budget removes them. `eve.retain_days` is read as
+# a fallback, so older property files keep working.
+disk_guard.eve_retain_days = 3
+
+# --- InfluxDB ---------------------------------------------------------------
+# Retention for the network_traffic bucket, applied over the API on every pass
+# (the bucket is NOT recreated, and nothing about the influxdb service changes,
+# which matters because its data lives in an anonymous volume -- recreating that
+# container is what loses it). At ~200k flows/hour a day is on the order of
+# 100-250 MB, so 30 days is a few gigabytes.
+#
+# The guard never deletes points. A delete inside a shard rewrites it and frees
+# nothing until compaction, whereas expiring a shard group returns the space --
+# so retention is the only lever pulled, and the shard group duration is pulled
+# down with it so expiry is not stuck at a week's granularity.
+disk_guard.influx_enabled = true
+disk_guard.influx_retention_days = 30
+disk_guard.influx_shard_hours = 24
+
+# Under disk pressure the retention is cut by this percentage per pass, never
+# below the floor. It is a step rather than a computed answer because how many
+# bytes a day of history costs is only known after that day has been deleted.
+# A cut is remembered across restarts (otherwise it would be undone and redone
+# forever) and is written to disk_guard_action in InfluxDB; editing
+# influx_retention_days here is what puts it back up.
+disk_guard.influx_shrink_percent = 25
+disk_guard.influx_min_retention_days = 2
+
+# How long to wait between cuts. InfluxDB's own retention enforcement runs every
+# 30 minutes, so the space a cut frees is not visible before then and a guard on
+# a 60s pass would take 30 days to the floor inside ten minutes, on one reading.
+disk_guard.influx_shrink_cooldown_seconds = 1800
+
+# There is one more case where the retention is left alone whatever the disk
+# says, and it is not configurable: when the bucket is less than a tenth of what
+# has to be reclaimed. Expiring all of it would not clear the ceiling either, so
+# something outside this stack filled the disk -- deleting weeks of alert
+# history would cost real evidence and fix nothing. The dashboard reads NO SPACE
+# LEFT and the log says which.
+
+# Optional hard slice of the disk for the bucket, independent of how much free
+# space there happens to be: over this, retention is cut even at 40% disk usage.
+# 0 = only the ceiling above governs.
+disk_guard.influx_max_bytes = 0
+
+
+# ============================================================================
+# DNS web filtering -- UT1 blacklists on the router's /ip/dns/adlist
+# ============================================================================
+# The dns-filter service mirrors categories from the Universite Toulouse 1
+# blacklists, renders each one as a hosts file, and keeps one /ip/dns/adlist row
+# per category on the router pointing back at this machine. A name on an active
+# list resolves to 0.0.0.0 for every client that uses the router as its
+# resolver.
+#
+# Needs RouterOS 7.15 or newer (/ip/dns/adlist does not exist before that) and
+# the same REST credentials as the responder above -- mikrotik.host/user/
+# password/scheme/port/verify_tls are shared, so there is nothing to repeat
+# here. The service reports the router's version on the dashboard and refuses
+# to send anything to an older one.
+#
+# It is read once at startup: editing this section means
+#   docker compose up -d --force-recreate --no-deps dns-filter
+
+# Master switch for the *service*, not for the filtering. false makes it
+# read-only: the dashboard still shows which categories are on and what the
+# router is blocking, but no click changes anything. This is the same trade as
+# rule_control.enabled -- Grafana's Infinity datasource calls the service with
+# the datasource's identity, so anyone who can view the dashboard can otherwise
+# turn the filter off, and nothing records who did.
+dns_filter.control_enabled = true
+
+# **Required.** The URL the ROUTER uses to download the lists, i.e. this
+# machine on the published port 8041, reachable from the router's side of the
+# network. There is no sane default: inside the container this host has no
+# address the router can use. Until it is set, no adlist row is created and the
+# dashboard says so.
+#   dns_filter.base_url = http://192.168.88.10:8041
+dns_filter.base_url =
+
+# Which categories are filtered is owned by the dashboard, not by this file --
+# it lives in the dns-filter-state volume so a click survives a restart. This
+# key only seeds the list on the very first start (no state file yet), so a
+# second site can be provisioned without clicking. Editing it later does
+# nothing; use the dashboard.
+#
+# A starter set that blocks the things nearly everyone wants blocked and
+# nothing anyone needs: ads, malware and phishing (one list -- see below),
+# cryptojacking, and doh, which is the one that matters most. Any client using
+# DNS-over-HTTPS never asks the router at all, so blocking the public DoH
+# endpoints is what keeps the rest of this from being trivially bypassed.
+dns_filter.categories = ads, malware, cryptojacking, doh, stalkerware
+
+# UT1 publishes the same list under several names, and MD5SUM.LST proves which:
+# ads==publicite, malware==phishing, adult==porn, drugs==drogue,
+# aggressive==agressif==violence, proxy==redirector. Enabling both halves of a
+# pair would cost the router's cache twice for the same names, so the second
+# one is refused with the name of the first. There is nothing to configure --
+# it is listed here because "why can't I add phishing?" has one answer.
+
+# Adlist matching is exact: RouterOS blocks the names in the file and nothing
+# else. UT1 lists registrable domains and never a `www.` label (measured: 0 of
+# the 4.6M entries in `adult`), so without this the filter blocks example.com
+# and lets www.example.com straight through. Expansion is limited to entries
+# that are already a registrable domain -- two labels, or three ending in a
+# known two-part suffix such as co.uk -- because a `www.` in front of
+# `mail.example.com` is a name nobody will ever ask for and it costs the same
+# cache as a real one.
+dns_filter.expand_www = true
+
+# Never blocked by a UT1 category: your own domains, and anything whose
+# breakage would be blamed on the network for a week. An entry exempts itself
+# and every name under it (example.com also covers ads.example.com).
+# Comma-separated. These are permanent: the dashboard's Whitelist table lists
+# them but cannot remove them -- the dashboard keeps its own whitelist (and an
+# explicit blacklist) in the dns-filter-state volume, on top of this one.
+dns_filter.allow_domains =
+
+# Upper bound on each of the dashboard's two lists (whitelist, blacklist).
+# Blacklisted names cost DNS cache like any other adlist name (two each with
+# the www. form), and are rendered before every category.
+dns_filter.max_list_entries = 1000
+
+# --- Limits. Adlist names are stored in the router's DNS cache, so the real
+# --- ceiling is /ip dns cache-size (KiB, default 2048 -- far too small), not
+# --- the router's RAM. Raise it on the router before enabling much:
+# ---     /ip dns set cache-size=65536      # 64 MiB, ~400k names
+# --- and if you see "adlist read: max cache size reached" in the router's log,
+# --- that is this limit and nothing here can work around it.
+
+# Names the router is allowed to hold. 0 (the default) derives it from the
+# cache-size the router reports, which is the only number that is actually
+# true; a non-zero value overrides that. Rendering stops at the budget rather
+# than overflowing the router, and any category that did not fit is marked
+# `capped` on the dashboard instead of quietly serving half a list.
+#
+# Categories are rendered smallest-list-first, so the budget buys as many
+# whole categories as it can and only the largest one is left to truncate
+# itself. That is predictable, but it is a ranking of what fits and not of what
+# matters: if the biggest list is the one you care about most, give the router
+# the cache for it rather than expecting the order to prefer it. `malware`
+# alone is ~446k names after www-expansion, i.e. ~70 MB of DNS cache: with the
+# default 2 MB it will show CAPPED, and raising cache-size on the router is the
+# only real fix.
+dns_filter.max_names = 0
+
+# Only used to turn the budget into a cache size, and to warn when the cache is
+# too small. ~150 bytes per name matches the field reports (100k names in
+# 10-15 MB); a quarter of the cache is left for the DNS caching it is for.
+dns_filter.bytes_per_name = 150
+dns_filter.cache_reserve_pct = 25
+
+# Used only until the router has been probed once.
+dns_filter.fallback_max_names = 200000
+
+# How many categories may be on at once. Each one is an adlist row on the
+# router and a file it downloads.
+dns_filter.max_categories = 12
+
+# Refuse a UT1 archive bigger than this without downloading it (bytes). The
+# guard exists for `adult`/`porn`, which is the only category that trips it.
+# Measured on the 2026-09-02 list, so you can decide with the real numbers:
+#
+#   4,597,565 domains -> 5,225,150 names after www-expansion
+#   ~747 MiB of DNS cache, i.e. /ip dns set cache-size=1048576 (1 GiB) to hold
+#   all of it with the usual 25% left for actual caching
+#
+# A router that cannot spare a gigabyte of DNS cache does not get a partial
+# adult filter -- it gets a useless one. UT1's `domains` file is sorted
+# alphabetically and rendering follows it, so a 64 MiB cache (~335k names,
+# 6.4%) blocks names from `0` to `artboypicteen-kr3.blogspot.sk` and nothing
+# after `ar`: not one of the sites anybody would name if you asked them what
+# this category is for. The dashboard marks it `capped` and says how many
+# names fit, which is the only reason it is honest to serve at all.
+#
+# Raising this to 20971520 (20 MB) is what allows adult/porn. Nothing else in
+# the catalogue is over 2 MB, so the guard has no other effect -- it is a
+# question about that one list, and the answer is the router's cache-size.
+dns_filter.max_archive_bytes = 4194304
+
+# --- Updating the content database --------------------------------------
+# UT1 rebuilds daily. A refresh re-reads the catalogue and re-downloads only
+# the categories whose md5 changed, so a daily check is nearly free.
+dns_filter.update_interval_hours = 24
+
+# Floor between manual "Update lists now" runs from the dashboard. The
+# dashboard re-sends its variables on every panel refresh, so without a floor
+# an update box left set to `now` would re-download UT1 once a minute.
+dns_filter.min_update_seconds = 1800
+
+# How often to read the router's adlist counters (s). This is where the
+# per-category "blocked queries" graph comes from -- RouterOS counts matches
+# per list, and the counter resets on a reload, so it is shipped as a delta.
+dns_filter.health_interval = 60
+
+# Comment prefix that marks the adlist rows this service owns. Rows without it
+# are never touched, so a hand-made adlist on the router is safe.
+dns_filter.comment_prefix = ut1
+
+# Log what would be sent to the router and change nothing there. The lists are
+# still downloaded and served, so this is the honest way to try it out.
+dns_filter.dry_run = false
+
+# ============================================================================
+# ip-reputation -- public blocklists onto a router address list
+# ============================================================================
+# Spamhaus DROP, abuse.ch Feodo, ET compromised hosts and others, merged into
+# one address list and refreshed twice a day. Which feeds are on is owned by
+# the IP Reputation dashboard; this only seeds the first start. Feeds:
+# spamhaus_drop, feodo, et_compromised, dshield, firehol_level1, cinsscore,
+# blocklist_de, tor_exit.
+#
+# The list blocks nothing until the router references it -- inbound from, and
+# outbound to (which is what matters for the botnet C2 feeds):
+#   /ip firewall raw add chain=prerouting action=drop src-address-list=reputation-blocked
+#   /ip firewall raw add chain=prerouting action=drop dst-address-list=reputation-blocked
+# The dashboard reads NO FIREWALL RULE until one exists.
+#
+# Never added, whatever a feed says: private, reserved, multicast and CGNAT
+# space, suricata.home_net, whitelist.*, mikrotik.host and the list below.
+# FireHOL level1 really does list 10.0.0.0/8; this is what stops it.
+ip_reputation.feeds = spamhaus_drop, feodo, et_compromised, dshield
+ip_reputation.address_list = reputation-blocked
+ip_reputation.never =
+# Refuse prefixes shorter than this outright.
+ip_reputation.min_prefix = 8
+# Upper bound on entries. RouterOS has no bulk add, so a first load is one
+# REST call per entry -- roughly a minute per thousand over https.
+ip_reputation.max_entries = 30000
+# Router-side expiry, refreshed before it runs out. Fails open if this stack
+# stops, and a router reboot (expiring entries are not saved) heals on the
+# next pass.
+ip_reputation.entry_timeout = 3d
+ip_reputation.update_interval_hours = 12
+ip_reputation.min_update_seconds = 1800
+# How often the router is reconciled against the merged list (minutes).
+ip_reputation.sync_minutes = 15
+ip_reputation.comment_prefix = iprep
+# Which of our hosts (suricata.home_net) talked to a listed address: the
+# collector's flows are re-read every this many seconds and matched against the
+# merged list, one ip_reputation_hit per pair -- what the alerter's reputation
+# source reads. 0 turns it off.
+ip_reputation.hits_interval = 60
+ip_reputation.control_enabled = true
+ip_reputation.dry_run = false
+
+# ============================================================================
+# dns-monitor -- who looked up what, and what the router refused
+# ============================================================================
+# Suricata streams DNS events at this service over a unix socket (see the
+# second eve-log output in suricata/suricata.yaml). It counts lookups per
+# client and records the blocked ones by name, which is the only place in the
+# stack that answers "which host asked for a blocked domain" -- RouterOS's
+# per-list match-count says how many, never who.
+#
+# It does NOT record every query name per host, because it does not have to:
+# the collector already tags every flow with `server_name` from the DNS query,
+# so `network_flow` where service == "dns" has that with full fidelity and
+# retroactively. What is new here is the *answer*.
+#
+# Nothing here is written to disk and nothing is published, so the only cost
+# of leaving it on is the InfluxDB series -- see dns_monitor.max_names.
+dns_monitor.enabled = true
+
+# Where Suricata dials in. Must match `filename` on the DNS eve-log output in
+# suricata.yaml, and both containers must mount the suricata-dns volume.
+dns_monitor.socket = /var/lib/suricata-dns/dns.socket
+
+# How often the accumulated counts are written (s). A point per lookup would
+# be one series write per DNS packet -- ~170/s on the production mirror -- for
+# data whose only use is being summed, so everything is counted between
+# flushes instead. Longer is cheaper and blunter; the dashboard's finest
+# useful bucket is this value.
+dns_monitor.flush_seconds = 30
+
+# An answer holding any of these is what "blocked" means. RouterOS answers
+# 0.0.0.0 for a name on an /ip/dns/adlist, and :: is the AAAA form. A name
+# that genuinely resolves to 0.0.0.0 would be counted as blocked too, which in
+# practice only happens on hosts files -- i.e. another blocklist.
+dns_monitor.blocked_answers = 0.0.0.0, ::
+
+# Optional. Empty means "any resolver". Set it to the router's DNS address(es)
+# when clients here can also reach a resolver that does its own filtering: a
+# 0.0.0.0 from a public blocklist resolver is a real block, but it is not
+# *ours*, and counting it would credit the adlist with names that are not on
+# it. Comma-separated.
+dns_monitor.resolvers =
+
+# Cap on how many distinct blocked names are recorded per flush. `qname` is a
+# tag so that "which names are being blocked" is groupable, and that is only
+# affordable because blocked names are a small set -- one host running through
+# generated domains is the shape that would make it unbounded. Past this, the
+# overflow is counted under the single name `(capped)` rather than dropped, so
+# the totals stay right when the detail cannot, and the pass reports how much
+# detail it lost.
+dns_monitor.max_names = 500
+
+# How long a connected Suricata may send nothing before the dashboard stops
+# calling it healthy (s). Suricata dials this socket when the *engine* starts,
+# not when it has a DNS event to write, so "connected" is true of a mirror
+# that carries no DNS at all -- which is an empty DNS Activity board under a
+# green tile, the one failure here that looks exactly like a quiet network.
+# Past this the DNS Monitor tile reads NO DNS EVENTS and the log says so once.
+# Long enough that an ordinary quiet spell never trips it; set 0 to disable
+# the state on a sensor that really is idle for hours.
+dns_monitor.silent_seconds = 600
+
+
+# ============================================================================
+# Full traffic retention -- every mirrored frame to rotating pcap files
+# ============================================================================
+# The pcap-dump service runs tcpdump on the tap Suricata reads (tzsp0), so the
+# files hold the *decapsulated* traffic -- plain Ethernet, what Wireshark opens
+# directly -- whether the mirror arrives as TZSP or VXLAN. Files are a ring:
+# when the budget is reached the oldest finished file is deleted, never the one
+# being written.
+#
+# On/off and the CIDR filter are owned by the Packet Capture dashboard (state
+# lives in the pcap-dump-state volume, so a click survives a restart). The two
+# keys marked "first start only" seed it once, so a host can be provisioned
+# without clicking; editing them later does nothing.
+#
+# A full packet capture holds every cleartext password, cookie and file that
+# crossed the mirror. Treat the destination directory like the router
+# credentials in this file.
+#
+# Read once at startup: editing this section means
+#   docker compose up -d --force-recreate --no-deps pcap-dump
+
+# Master switch for the *service*, not for the capture. false makes it
+# read-only: the dashboard lists the files and shows the state, but no click
+# changes anything. Same trade as rule_control.enabled -- the Infinity
+# datasource calls the service with its own identity, so anyone who can view
+# the dashboard can otherwise start recording everything.
+pcap_dump.control_enabled = true
+
+# First start only: capture on or off, and the networks to keep. Empty CIDR =
+# all traffic. Several networks are comma-separated; a frame is kept if either
+# endpoint is in any of them (802.1Q-tagged frames included), and unlike the
+# dashboards' cidr box any prefix length is exact -- /20 means /20.
+pcap_dump.enabled = false
+pcap_dump.cidr =
+
+# Destination directory INSIDE the container. It must be a mount: the service
+# refuses to write into the container's own layer. Which host directory is
+# mounted there is set in docker-compose.yml, by PCAP_DIR in .env (default
+# ./pcap next to the compose file) -- a container cannot pick its own mounts,
+# so that half cannot live in this file.
+pcap_dump.path = /pcap
+
+# Total budget for all pcap files, and the size at which tcpdump starts a new
+# one. Binary suffixes (512M, 20G); a bare number is bytes. file_bytes is
+# clamped to half the budget -- a ring needs two files to rotate. A smaller
+# file means finer-grained deletion and a smaller download per incident.
+pcap_dump.max_bytes = 10G
+pcap_dump.file_bytes = 100M
+
+# The budget also shrinks as the filesystem fills, for any reason: the files
+# may only grow while the disk stays under this. Deliberately below
+# disk_guard.target_disk_percent (85), so the capture -- the most expendable
+# data on this host -- yields first and disk-guard never has to cut InfluxDB
+# retention because of it. If not even one file fits, capture PAUSES (dashboard
+# reads PAUSED - DISK) and resumes by itself once there is room for two.
+pcap_dump.max_disk_percent = 80
+
+# Bytes kept per frame. 0 = whole frames. 128 keeps the headers of nearly
+# everything for a fraction of the disk, if payloads are not needed.
+pcap_dump.snaplen = 0
+
+# How often the budget is enforced (s). The files can overshoot it by what the
+# mirror writes in this time, so keep it short; listing the directory is cheap.
+pcap_dump.check_seconds = 2
+
+# Downloads from the Packet Capture dashboard: one host's traffic out of the
+# ring, re-filtered by tcpdump, as a pcap or as tcpdump's text output. The
+# browser goes through Grafana's datasource proxy (pcap-extract), so it takes a
+# Grafana login -- but any login, viewer included, and the files hold every
+# cleartext credential of that host. false refuses every download; each one is
+# audited with the Grafana user's name. download_parallel bounds how many run
+# at once -- each is a tcpdump reading the ring end to end.
+pcap_dump.download_enabled = true
+pcap_dump.download_parallel = 2
+
+
+# ============================================================================
+# Wireless IDS -- raw 802.11 frames from a radio in sniffer mode
+# ============================================================================
+# The sensor streams TZSP to UDP 37008, the same port as the wired mirror: the
+# RouterOS wireless sniffer has no port setting. tzsp-decap tells the two apart
+# by TZSP encapsulation and passes the 802.11 on to the wids service, which
+# reads the cleartext half of Wi-Fi: beacons, probes,
+# (de)authentication, association, EAPOL and every frame's 802.11 header.
+# Payloads are encrypted under WPA2/WPA3, so there is no signature inspection;
+# everything here is about who is on the air and what they claim to be.
+#
+# On the sensor (a MikroTik with the legacy `wireless` package), roughly --
+# check the exact keys against your RouterOS version:
+#   /interface wireless sniffer set streaming-enabled=yes \
+#       streaming-server=<this host> multiple-channels=no
+#   /interface wireless sniffer sniff wlan1
+# `docker compose logs tzsp-decap` counts what it passed on ("802.11 to
+# wids:37009 N"); wids itself listens on 37009 inside the compose network only.
+# A radio in sniffer mode serves no clients, and it hears ONE channel at a
+# time: fixed on the channel your APs use, it sees everything there and
+# nothing elsewhere; hopping, it sees a little of everything. A short attack on
+# a channel it is not on is invisible either way.
+#
+# Alerts only. Nothing here ever writes to the router: every 802.11 source
+# address is forgeable, and blocking the transmitter of a forged deauth would
+# block the client the attacker impersonated.
+#
+# Read once at startup: editing this section means
+#   docker compose up -d --force-recreate --no-deps wids
+
+wids.enabled = true
+
+# Your networks, and the BSSIDs allowed to carry them, are managed on the
+# Wireless IDS dashboard: click an SSID in the Access Point Inventory to mark
+# it as ours, a BSSID to authorize it; remove them under Our Networks. Nothing
+# needs to be set here. An AP on one of our SSIDs from a BSSID that is not
+# authorized is an EVIL TWIN (critical); with SSIDs but no BSSIDs it reads
+# UNVERIFIED instead.
+#
+# These two keys only SEED the very first start (comma-separated; SSIDs exact
+# and case-sensitive; a BSSID ending in * is a prefix of at least the OUI,
+# e.g. 48:a9:8a:12:34:*). After that the dashboard owns the lists, in the
+# wids-state volume, and editing these does nothing -- like
+# dns_filter.categories.
+wids.our_ssids =
+wids.authorized_bssids =
+
+# false: the dashboard shows the lists but cannot change them (both ways).
+# Anyone who can view the dashboard can otherwise change them -- the Infinity
+# datasource calls wids with its own identity, not the viewer's -- so every
+# change is audited in wids_policy_control.
+wids.control_enabled = true
+
+# Weakest security your SSIDs may be offered with: open, wep, wpa, owe, wpa2,
+# wpa3. Below it is a security_downgrade alert -- critical from an unlisted
+# BSSID (a twin luring clients onto weaker crypto), high from one of yours (a
+# misconfiguration). wpa2 accepts the WPA2/WPA3 transition mode; wpa3 does not.
+wids.min_security = wpa2
+
+# true: also report your SSIDs where PMF (802.11w) is not *required*. Without
+# it clients obey forged deauthentication frames, which is what makes a deauth
+# flood work at all. Off by default because plenty of older clients cannot do
+# PMF and this would be a permanent informational alert.
+wids.require_pmf = false
+
+# Optional: sensor addresses allowed to feed this service. Empty = any.
+# Anyone who can send 802.11 TZSP to 37008 can inject beacons, i.e. fabricate
+# alerts; set this when the port is reachable from more than the sensors.
+# tzsp-decap passes each sensor's own address on, so list the sensors here,
+# not tzsp-decap.
+wids.sensors =
+
+# Detection window (s). Every count below is per window, and the inventory is
+# written once per window. Longer is cheaper and blunter.
+wids.window_seconds = 60
+
+# The NO STREAM state on the dashboard: no datagram at all for this long (s).
+wids.silent_seconds = 300
+
+# One alert point per (alert, BSSID) at most this often (s); its count is
+# everything seen since the previous point. Policy findings (TKIP, WPS, PMF,
+# an AP of yours below min_security, ad-hoc networks) repeat hourly instead:
+# they are states, not events.
+wids.alert_repeat_seconds = 300
+wids.policy_repeat_seconds = 3600
+
+# --- Thresholds, per window ---------------------------------------------------
+# Deauth/disassoc frames for one BSSID; broadcast ones (to every client at
+# once) need far fewer -- a healthy AP almost never sends them.
+wids.deauth_threshold = 30
+wids.deauth_broadcast_threshold = 5
+# BSSIDs never seen before (the known set persists, and the first two windows
+# after a first-ever start are ignored).
+wids.beacon_flood_threshold = 50
+# Distinct SSIDs one BSSID answers or beacons as: KARMA / MANA.
+wids.karma_ssids = 5
+# Distinct source addresses sending auth/assoc requests to one BSSID.
+wids.auth_flood_clients = 40
+# Probe requests from one source (informational: survey tools, wardriving).
+wids.probe_flood_threshold = 300
+# Times one BSSID's beacon sequence number steps backwards: two transmitters.
+wids.spoof_backsteps = 3
+# Clients that took handshake message 1 and never sent message 2 (PMKID /
+# handshake harvesting), per BSSID.
+wids.eapol_unanswered = 5
+# Times message 3 is sent to the same station (bad link, or KRACK).
+wids.m3_retransmits = 4
+# Frames whose Duration field reserves the medium for at least nav_threshold_us
+# -- normal values are a few hundred microseconds -- before nav_abuse fires.
+wids.nav_threshold_us = 15000
+wids.nav_frames = 100
+
+# --- Radio evidence (needs radiotap: what the RouterOS sniffer sends) ----------
+# Beacon clock: an AP's beacon timer minus the sensor's receive timer is
+# constant for one transmitter (measured spread 0.1 ms). Jumps of at least
+# tsf_jump_ms, tsf_jumps times in a window, mean two clocks on one BSSID.
+wids.tsf_jump_ms = 50
+wids.tsf_jumps = 3
+# A beacon heard this many MHz or more away from the channel it claims is
+# relayed or forged. 25 skips overlapping 2.4 GHz neighbours (5 heard on 4).
+wids.channel_mismatch_mhz = 25
+wids.channel_mismatch_frames = 3
+# Signal baseline per sensor and BSSID, learnt over rssi_learn_windows. A mean
+# shifted by rssi_shift_db for rssi_shift_windows in a row is an alert; after
+# rssi_relearn_windows the new level is accepted (the AP really moved).
+# Windows with fewer than rssi_min_frames frames from the AP are not judged.
+wids.rssi_learn_windows = 30
+wids.rssi_shift_db = 15
+wids.rssi_shift_windows = 3
+wids.rssi_relearn_windows = 60
+wids.rssi_min_frames = 3
+wids.max_baselines = 8000
+
+# --- Sensor health -------------------------------------------------------------
+# A sensor heard for at least this long (or listed in wids.sensors) that then
+# sends nothing for this long raises sensor_silent. Forgotten after the days.
+wids.sensor_silent_seconds = 300
+wids.sensor_forget_days = 7
+
+# --- Cardinality --------------------------------------------------------------
+# BSSIDs written per window (a city-centre sensor can hear hundreds), and how
+# many are remembered for "first seen" (aged out after known_ap_days).
+wids.max_aps = 2000
+wids.max_known_aps = 20000
+wids.known_ap_days = 30
+# Directed probe requests name the networks a device has joined before -- home,
+# hotel, previous employer. Recorded per SSID (never per device) so the board
+# can show what your clients leak; false turns it off. Overflow past
+# max_probe_ssids is counted under (capped).
+wids.record_probes = true
+wids.max_probe_ssids = 200
+# Remember which stations use your APs, so one seen exchanging data with an
+# evil twin -- or with a foreign AP -- is reported. Modern clients use a
+# different random MAC per SSID, so the foreign-AP half misses most phones.
+wids.track_clients = true
+
+# ============================================================================
+# ARP watch: IP -> MAC bindings, ARP spoofing and poisoning   (arp-watch)
+# ============================================================================
+#
+# Reads the ARP in the mirror (tzsp0) and records which MAC answers for which
+# IPv4 address, with its vendor from the IEEE registry. Alerts, on the
+# Suricata 1-4 scale, go to the Ethernet Attacks dashboard:
+#   1 gateway_spoof        a protected address claimed by any other MAC
+#   2 arp_poisoning        two MACs alternating on one IP, one of them a
+#                          known other host -- the man-in-the-middle shape
+#   3 ip_conflict          two MACs alternating, neither anybody else
+#   3 unsolicited_replies / garp_flood / arp_scan / eth_mismatch / bogus_arp
+#   3/4 mac_changed        one clean move (3 if the new MAC is another host)
+#   4 new_station          a MAC never heard before
+#
+# It sees what the router's sniffer sees: every broadcast (requests,
+# gratuitous ARP), and unicast replies only on the ports it sniffs. A mangle
+# (IP-only) mirror carries no ARP at all, and neither does an  TAP; the
+# dashboard then reads NO ARP rather than looking healthy.
+#
+# Alerts only. Nothing here ever writes to the router: an ARP sender address
+# is forgeable by anyone on the segment.
+#
+# Read once at startup: editing this section means
+#   docker compose up -d --force-recreate --no-deps arp-watch
+
+arp_watch.enabled = true
+
+# Addresses no other MAC may ever claim -- gateways, DNS servers, anything a
+# poisoner would want to sit in front of. `ip` learns the MAC the first time
+# it is heard; `ip=mac` (or `ip=mac|mac` for a pair) pins it, which also
+# catches a poisoner already active when this service first starts.
+# mikrotik.host and every mikrotik.<name>.host are added automatically unless
+# protect_routers = false.
+arp_watch.protected =
+arp_watch.protect_routers = true
+# A learned (not pinned) protected address re-adopts a new MAC only after it
+# has been the sole claimant this long with the old one silent throughout --
+# a replaced router stops alerting; a poisoner, whom the real gateway keeps
+# contradicting, never qualifies.
+arp_watch.relearn_seconds = 3600
+
+# MACs that answer for addresses that are not their own by design: VRRP
+# (00:00:5e:00:01:*), proxy-ARP routers, a firewall cluster's shared MAC.
+# Exact, or a prefix ending in * (never shorter than the 3-byte OUI). They
+# never raise conflict, flood, sweep or mismatch alerts.
+arp_watch.trusted_macs =
+
+# Seconds per window: thresholds below are per window, points are written once.
+arp_watch.window_seconds = 60
+# After the FIRST-EVER start, new_station and mac_changed stay quiet this long
+# while the station table fills (gateway_spoof and conflicts do not).
+arp_watch.learn_seconds = 3600
+# Switches between claimants of one IP, within one window, that make it a
+# conflict. 2 = A, then B, then A again.
+arp_watch.flip_threshold = 2
+# Per MAC per window. arpspoof sends one reply per victim every 2s (30/min).
+arp_watch.unsolicited_threshold = 20
+arp_watch.garp_threshold = 30
+# Distinct addresses asked for; a protected (router) sender is exempt.
+arp_watch.scan_threshold = 50
+# One point per (alert, address) per this many seconds; counts accumulate.
+arp_watch.alert_repeat_seconds = 300
+# The dashboard reads NO MIRROR / NO ARP after this long without either.
+# 0 disables both readings.
+arp_watch.silent_seconds = 600
+
+# --- Cardinality --------------------------------------------------------------
+# IP/MAC pairs written per window (the overflow is counted), and the size of
+# the remembered station and MAC tables (least recently heard go first).
+arp_watch.max_bindings = 5000
+arp_watch.max_state = 50000

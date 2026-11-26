@@ -1,0 +1,29 @@
+# Local Grafana credentials (holds the admin password) - never commit
+properties.yml
+
+# Router credentials + site whitelist for the IDS responder - never commit.
+# Start from suricata.properties.example, which is committed.
+suricata.properties
+
+# IDE
+.idea/
+
+# Python bytecode from running a sidecar/selftest outside its container
+__pycache__/
+
+# Per-host compose settings, e.g. COMPOSE_FILE=docker-compose.yml:docker-compose.vxlan.yml
+# on a VXLAN-fed host - never commit
+.env
+
+# Full packet captures written by pcap-dump (default PCAP_DIR) - every byte of
+# the mirrored traffic, credentials included. Never commit.
+pcap/
+.aider*
+
+# Backups install.py makes before rewriting the files above -- same secrets
+.env.bak
+suricata.properties.bak
+properties.yml.bak
+
+# Webhook tokens for the alerter (ALERT_SECRET_*=...) - never commit
+alerting.env

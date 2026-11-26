@@ -1,0 +1,65 @@
+tzsp-monitor -- INSTALL (TL;DR)
+================================
+Router: 192.168.88.1 (MikroTik, RouterOS 7.15+)   Monitor host: 192.168.0.1
+
+Shortcut: steps 1-3 (and the checks in 4) are what the setup assistant asks:
+
+     git clone <repo> tzsp-monitor && cd tzsp-monitor && python3 install.py
+
+It writes .env, suricata.properties and properties.yml, tests the router login
+read-only and prints the RouterOS commands still missing. By hand instead:
+
+1. Host (192.168.0.1): Docker + compose plugin, then
+
+     git clone <repo> tzsp-monitor && cd tzsp-monitor
+     cp suricata.properties.example suricata.properties   # BEFORE first `up`
+     printf 'GF_SECURITY_ADMIN_USER=admin\nGF_SECURITY_ADMIN_PASSWORD=changeme\n' > properties.yml
+
+2. .env (git-ignored, next to docker-compose.yml): set your NIC
+
+     echo SNIFF_INTERFACE=eth0 >> .env
+
+3. suricata.properties -- the lines that matter:
+
+     mikrotik.host        = 192.168.88.1
+     mikrotik.user        = ids-responder
+     mikrotik.password    = <secret>
+     suricata.home_net    = [192.168.0.0/16]
+     dns_filter.base_url  = http://192.168.0.1:8041
+
+4. Router (192.168.88.1):
+
+     # mirror traffic to the monitor as TZSP
+     /tool/sniffer set filter-interface=ether1 filter-stream=yes \
+         streaming-enabled=yes streaming-server=192.168.0.1:37008
+     /tool/sniffer start
+     # REST API + a user for the responder / dns-filter
+     /ip/service enable www-ssl
+     /user/group add name=ids policy=read,write,api,rest-api
+     /user add name=ids-responder group=ids password=<secret>
+     # the list is inert until a rule uses it (deliberately manual)
+     /ip/firewall/raw add chain=prerouting src-address-list=suricata-blocked action=drop
+     # DNS filtering: clients must use the router as resolver
+     /ip/dns set allow-remote-requests=yes cache-size=65536
+
+5. Start and check:
+
+     docker compose up -d --build
+     python3 tzsp-decap/selftest.py                   # IDS path end to end
+     docker compose exec dns-filter python selftest.py
+     docker compose logs --tail=3 tzsp-decap          # pps > 0 = mirror arrives
+
+   Grafana: http://192.168.0.1:3000   (InfluxDB: :8086)
+
+ / VXLAN-fed host instead of TZSP: skip the sniffer, point the vTAP at
+UDP 4789 and run
+     echo COMPOSE_FILE=docker-compose.yml:docker-compose.vxlan.yml > .env
+before step 5.
+
+Open ports on the host: 37008/udp (mirror), 8041/tcp (router fetches lists),
+3000/tcp (Grafana). Details and gotchas: CLAUDE.md.
+
+Optional, full packet capture (pcap files of the mirror): off until switched on
+in Grafana -> 3 · Security -> Packet Capture. Files land in ./pcap unless
+     echo PCAP_DIR=/srv/pcap >> .env      # ideally a disk of its own
+and the budget is pcap_dump.max_bytes in suricata.properties (default 10G).

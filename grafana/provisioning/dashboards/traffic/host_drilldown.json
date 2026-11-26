@@ -1,0 +1,658 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "uid": "host-drilldown",
+  "links": [],
+  "liveNow": true,
+  "templating": {
+    "list": [
+      {
+        "name": "site",
+        "type": "datasource",
+        "label": "Site",
+        "description": "Which tzsp-monitor instance these panels read. Remote sites are the REMOTE_SITE_* lines in properties.yml of the instance serving this Grafana; each is a datasource pointed at that site's own InfluxDB, so nothing is copied between sites. Controls never follow this box: rule suppression and reverse DNS only ever act on the local site, and are inert while another site is selected.",
+        "query": "influxdb",
+        "regex": "",
+        "current": {
+          "selected": false,
+          "text": "InfluxDB_Flux",
+          "value": "InfluxDB_Flux"
+        },
+        "options": [],
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1,
+        "skipUrlSync": false
+      },
+      {
+        "name": "ip",
+        "type": "query",
+        "label": "IP Address",
+        "description": "Pick a host to drill down into (matches either source or destination).",
+        "datasource": {
+          "type": "influxdb",
+          "uid": "${site}"
+        },
+        "definition": "IPs (src_ip ∪ dst_ip)",
+        "query": "import \"influxdata/influxdb/schema\"\nunion(tables: [\n  schema.tagValues(bucket: \"network_traffic\", tag: \"src_ip\"),\n  schema.tagValues(bucket: \"network_traffic\", tag: \"dst_ip\")\n])\n  |> group()\n  |> distinct(column: \"_value\")\n  |> sort(columns: [\"_value\"])\n  |> keep(columns: [\"_value\"])",
+        "refresh": 2,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "hide": 0,
+        "current": {}
+      },
+      {
+        "name": "top_peers",
+        "type": "query",
+        "label": "Top peers (internal)",
+        "description": "Hidden helper: the top-30 peer IPs of $ip, fed to the reverse-DNS resolver.",
+        "hide": 2,
+        "datasource": {
+          "type": "influxdb",
+          "uid": "${site}"
+        },
+        "definition": "top 10 peers of $ip by bytes",
+        "query": "sent = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip == \"${ip}\")\n  |> group(columns: [\"dst_ip\"])\n  |> sum()\n  |> group()\n  |> rename(columns: {dst_ip: \"peer\"})\n  |> keep(columns: [\"peer\", \"_value\"])\n\nrecv = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.dst_ip == \"${ip}\")\n  |> group(columns: [\"src_ip\"])\n  |> sum()\n  |> group()\n  |> rename(columns: {src_ip: \"peer\"})\n  |> keep(columns: [\"peer\", \"_value\"])\n\nunion(tables: [sent, recv])\n  |> group(columns: [\"peer\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 30)\n  |> keep(columns: [\"peer\"])\n  |> rename(columns: {peer: \"_value\"})",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": null,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "table",
+      "title": "Top 30 Peers of $ip (Reverse DNS, Country, bytes sent + received)",
+      "gridPos": {
+        "h": 17,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Bytes"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "ip",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^host.*$",
+            "renamePattern": "host"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^country.*$",
+            "renamePattern": "country"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "ip": 0,
+              "host": 1,
+              "country": 2,
+              "bytes": 3
+            },
+            "renameByName": {
+              "ip": "IP",
+              "host": "Hostname",
+              "country": "Country",
+              "bytes": "Bytes"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Bytes",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "sent = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip == \"${ip}\")\n  |> group(columns: [\"dst_ip\"])\n  |> sum()\n  |> group()\n  |> rename(columns: {dst_ip: \"peer\"})\n  |> keep(columns: [\"peer\", \"_value\"])\n\nrecv = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.dst_ip == \"${ip}\")\n  |> group(columns: [\"src_ip\"])\n  |> sum()\n  |> group()\n  |> rename(columns: {src_ip: \"peer\"})\n  |> keep(columns: [\"peer\", \"_value\"])\n\nunion(tables: [sent, recv])\n  |> group(columns: [\"peer\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 30)\n  |> rename(columns: {peer: \"ip\", _value: \"bytes\"})\n  |> keep(columns: [\"ip\", \"bytes\"])"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://dns-resolver:8000/resolve?ips=${top_peers:csv}&site=${site}",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "ip",
+              "text": "ip",
+              "type": "string"
+            },
+            {
+              "selector": "host",
+              "text": "host",
+              "type": "string"
+            },
+            {
+              "selector": "country",
+              "text": "country",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "barchart",
+      "title": "Top 10 Applications for $ip (bytes)",
+      "gridPos": {
+        "h": 17,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xTickLabelRotation": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip == \"${ip}\" or r.dst_ip == \"${ip}\")\n  |> group(columns: [\"application\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 10)",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Last 10 Flow Records for $ip",
+      "gridPos": {
+        "h": 11,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "id": 3,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bytes"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "duration_ms"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Time",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "format": "table",
+          "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\")\n  |> filter(fn: (r) => r.src_ip == \"${ip}\" or r.dst_ip == \"${ip}\")\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> group()\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 10)\n  |> keep(columns: [\"_time\", \"src_ip\", \"src_country\", \"dst_ip\", \"dst_country\", \"protocol\", \"application\", \"category\", \"bytes\", \"packets\", \"duration_ms\"])",
+          "refId": "A"
+        }
+      ],
+      "description": "src_country / dst_country are the GeoIP countries the collector tagged the flow with (blank on flows recorded before it had a GeoIP database)."
+    },
+    {
+      "type": "table",
+      "title": "Reverse DNS and Country of $ip",
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 0,
+        "y": 28
+      },
+      "id": 4,
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "cc": true
+            },
+            "indexByName": {
+              "ip": 0,
+              "host": 1,
+              "country": 2
+            },
+            "renameByName": {
+              "ip": "IP",
+              "host": "Hostname",
+              "country": "Country"
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://dns-resolver:8000/resolve?ips=${ip}&site=${site}",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "ip",
+              "text": "ip",
+              "type": "string"
+            },
+            {
+              "selector": "host",
+              "text": "host",
+              "type": "string"
+            },
+            {
+              "selector": "country",
+              "text": "country",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "description": "Country from a local GeoIP database (IP geolocation by DB-IP, db-ip.com); \"private network\" for any non-public address."
+    },
+    {
+      "type": "table",
+      "id": 6,
+      "title": "MAC Address and Vendor of $ip (from ARP)",
+      "description": "Which MAC answered ARP for this address in range, and who made the NIC (IEEE registry; \"(randomized)\" = a locally administered address the device made up). Recorded by arp-watch, so it exists only for hosts on a segment whose ARP the mirror carries -- an address behind a router never ARPs here, and its frames carry the router's MAC anyway. Two rows mean two MACs claimed it: a new lease, or ARP spoofing -- click a MAC to check on the Ethernet Attacks board.",
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 12,
+        "y": 28
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "base = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"arp_binding\" and r.ip == \"${ip}\")\n\ncols = [\"mac\", \"vendor\", \"vlan\", \"_field\", \"_value\"]\npackets = base\n  |> filter(fn: (r) => r._field == \"packets\")\n  |> sum()\n  |> toFloat()\n  |> keep(columns: cols)\nfirst = base\n  |> filter(fn: (r) => r._field == \"first_seen\")\n  |> last()\n  |> map(fn: (r) => ({r with _value: float(v: r._value) * 1000.0}))\n  |> keep(columns: cols)\nlast = base\n  |> filter(fn: (r) => r._field == \"packets\")\n  |> last()\n  |> map(fn: (r) => ({r with _field: \"last_seen\", _value: float(v: int(v: r._time)) / 1000000.0}))\n  |> keep(columns: cols)\n\n// More than one row here means more than one MAC answered for this address\n// in range: a new lease, or somebody impersonating it -- the Ethernet Attacks\n// board says which.\nunion(tables: [packets, first, last])\n  |> group()\n  |> map(fn: (r) => ({r with vendor: if exists r.vendor then r.vendor else \"\"}))\n  |> pivot(rowKey: [\"mac\", \"vendor\", \"vlan\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> sort(columns: [\"last_seen\"], desc: true)\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          },
+          "noValue": "no ARP seen for this address"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MAC"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 140
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "This MAC on the Ethernet Attacks board",
+                    "url": "/d/ethernet-attacks?${__url_time_range}&${site:queryparam}&var-mac=${__value.raw}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "VLAN"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 55
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ARP packets"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 95
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MAC first heard"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              },
+              {
+                "id": "custom.width",
+                "value": 155
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last heard"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              },
+              {
+                "id": "custom.width",
+                "value": 155
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "mac": 0,
+              "vendor": 1,
+              "vlan": 2,
+              "packets": 3,
+              "first_seen": 4,
+              "last_seen": 5
+            },
+            "renameByName": {
+              "mac": "MAC",
+              "vendor": "Vendor",
+              "vlan": "VLAN",
+              "packets": "ARP packets",
+              "first_seen": "MAC first heard",
+              "last_seen": "Last heard"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "type": "barchart",
+      "title": "Traffic of $ip by Peer Country (top 15, bytes)",
+      "id": 5,
+      "description": "Bytes $ip sent to and received from public peers, by the peer's country. From GeoIP tags the collector writes (IP geolocation by DB-IP, db-ip.com): flows recorded before it had the database are not counted, and private peers are never a country.",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3987e5"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xField": "name",
+        "xTickLabelRotation": 0,
+        "showValue": "auto",
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "barWidth": 0.5
+      },
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "country",
+            "mode": "inner"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^name.*$",
+            "renamePattern": "name"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "country": true
+            },
+            "indexByName": {
+              "name": 0,
+              "bytes": 1
+            },
+            "renameByName": {
+              "bytes": "Bytes"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Bytes",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "// Bytes $ip exchanged with each country: its peers' GeoIP country, from the\n// collector's src_country / dst_country tags (tag filter + group + sum, all\n// pushed down). Private peers are not a country and are left out, and so are\n// flows recorded before the collector had a GeoIP database.\nsent = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.src_ip == \"${ip}\" and r.dst_country =~ /^[A-Z]{2}$/)\n  |> group(columns: [\"dst_country\"])\n  |> sum()\n  |> rename(columns: {dst_country: \"country\"})\n\nrecv = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r._field == \"bytes\")\n  |> filter(fn: (r) => r.dst_ip == \"${ip}\" and r.src_country =~ /^[A-Z]{2}$/)\n  |> group(columns: [\"src_country\"])\n  |> sum()\n  |> rename(columns: {src_country: \"country\"})\n\nunion(tables: [sent, recv])\n  |> group(columns: [\"country\"])\n  |> sum()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 15)\n  |> rename(columns: {_value: \"bytes\"})\n  |> keep(columns: [\"country\", \"bytes\"])"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://dns-resolver:8000/countries",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "cc",
+              "text": "country",
+              "type": "string"
+            },
+            {
+              "selector": "label",
+              "text": "name",
+              "type": "string"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": [
+    "network",
+    "ndpi",
+    "tzsp",
+    "host"
+  ],
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Host Drill-Down (by IP)",
+  "version": 1
+}

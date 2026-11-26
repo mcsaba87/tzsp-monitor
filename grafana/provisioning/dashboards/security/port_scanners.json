@@ -1,0 +1,2011 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "uid": "port-scanners",
+  "title": "Port Scanners",
+  "description": "Who is scanning the network: TCP connection attempts that fan out across many targets or services and never complete, ICMP sweeps, and Suricata's own scan signatures. Click a source to see exactly which ports and hosts it tried and which answered.",
+  "links": [],
+  "liveNow": false,
+  "refresh": "5m",
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": [
+    "network",
+    "tzsp",
+    "security",
+    "scan"
+  ],
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "version": 1,
+  "panels": [
+    {
+      "type": "stat",
+      "id": 1,
+      "title": "Scanning Sources",
+      "description": "Sources whose TCP connection attempts reach many targets or many services AND almost never complete (FIN/SYN under 20%). That combination is what a port scan is; a busy legitimate client fans out just as wide but finishes its connections. The count is of hosts, over the dashboard range.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\nimport \"array\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\n// Connection attempts: flows that carried a SYN. A flow without one is the\n// continuation of a connection cut by active_timeout=5, not a new attempt.\nopens = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r.protocol == \"6\" and r._field == \"syn_packets\" and r._value > 0)\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\", \"dst_ip\", \"service\"])\n  |> count()\n\n// Handshake outcome per source. SYN is counted in both directions (SYN and\n// SYN-ACK), and so is FIN, so a completed connection reads syn 2 / fin 2.\nflags = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r.protocol == \"6\" and (r._field == \"syn_packets\" or r._field == \"fin_packets\" or r._field == \"rst_packets\"))\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\", \"_field\"])\n  |> sum()\n  |> map(fn: (r) => ({src_ip: r.src_ip, k: r._field, v: r._value}))\n\nfound = union(tables: [\n  opens |> group(columns: [\"src_ip\"]) |> sum()\n        |> map(fn: (r) => ({src_ip: r.src_ip, k: \"attempts\", v: r._value})),\n  opens |> group(columns: [\"src_ip\", \"dst_ip\"]) |> sum() |> group(columns: [\"src_ip\"]) |> count()\n        |> map(fn: (r) => ({src_ip: r.src_ip, k: \"targets\", v: r._value})),\n  opens |> group(columns: [\"src_ip\", \"service\"]) |> sum() |> group(columns: [\"src_ip\"]) |> count()\n        |> map(fn: (r) => ({src_ip: r.src_ip, k: \"services\", v: r._value})),\n  flags,\n])\n  |> group()\n  |> pivot(rowKey: [\"src_ip\"], columnKey: [\"k\"], valueColumn: \"v\")\n  |> filter(fn: (r) => exists r.attempts and r.attempts >= ${min_attempts})\n  |> filter(fn: (r) => r.targets >= 20 or r.services >= 5)\n  |> map(fn: (r) => ({r with\n      completion: if r.syn_packets > 0 then float(v: r.fin_packets) / float(v: r.syn_packets) * 100.0 else 0.0,\n      refused: float(v: r.rst_packets) / float(v: r.attempts) * 100.0,\n      pattern: if r.targets >= 20 and r.services >= 5 then \"block\"\n               else if r.services >= 5 then \"vertical\" else \"horizontal\"}))\n  |> map(fn: (r) => ({r with\n      verdict: if r.completion < 20.0 then \"SCAN\" else if r.completion < 50.0 then \"CHECK\" else \"BUSY CLIENT\"}))\n  |> filter(fn: (r) => r.verdict == \"SCAN\")\n  |> count(column: \"src_ip\")\n  |> rename(columns: {src_ip: \"_value\"})\n\n// Union a zero so an empty result reads NONE rather than a blank tile.\nunion(tables: [found, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 0,
+                "result": {
+                  "color": "#0ca30c",
+                  "index": 0,
+                  "text": "NONE"
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 1,
+                "to": 1000000000.0,
+                "result": {
+                  "color": "#d03b3b",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 42
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 2,
+      "title": "Sources to Check",
+      "description": "Same fan-out, but 20-50% of the connections complete: a scanner that found a lot open, a vulnerability scanner doing real requests, or a client with a broken peer. Look at them in the table.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 5,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\nimport \"array\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\n// Connection attempts: flows that carried a SYN. A flow without one is the\n// continuation of a connection cut by active_timeout=5, not a new attempt.\nopens = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r.protocol == \"6\" and r._field == \"syn_packets\" and r._value > 0)\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\", \"dst_ip\", \"service\"])\n  |> count()\n\n// Handshake outcome per source. SYN is counted in both directions (SYN and\n// SYN-ACK), and so is FIN, so a completed connection reads syn 2 / fin 2.\nflags = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r.protocol == \"6\" and (r._field == \"syn_packets\" or r._field == \"fin_packets\" or r._field == \"rst_packets\"))\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\", \"_field\"])\n  |> sum()\n  |> map(fn: (r) => ({src_ip: r.src_ip, k: r._field, v: r._value}))\n\nfound = union(tables: [\n  opens |> group(columns: [\"src_ip\"]) |> sum()\n        |> map(fn: (r) => ({src_ip: r.src_ip, k: \"attempts\", v: r._value})),\n  opens |> group(columns: [\"src_ip\", \"dst_ip\"]) |> sum() |> group(columns: [\"src_ip\"]) |> count()\n        |> map(fn: (r) => ({src_ip: r.src_ip, k: \"targets\", v: r._value})),\n  opens |> group(columns: [\"src_ip\", \"service\"]) |> sum() |> group(columns: [\"src_ip\"]) |> count()\n        |> map(fn: (r) => ({src_ip: r.src_ip, k: \"services\", v: r._value})),\n  flags,\n])\n  |> group()\n  |> pivot(rowKey: [\"src_ip\"], columnKey: [\"k\"], valueColumn: \"v\")\n  |> filter(fn: (r) => exists r.attempts and r.attempts >= ${min_attempts})\n  |> filter(fn: (r) => r.targets >= 20 or r.services >= 5)\n  |> map(fn: (r) => ({r with\n      completion: if r.syn_packets > 0 then float(v: r.fin_packets) / float(v: r.syn_packets) * 100.0 else 0.0,\n      refused: float(v: r.rst_packets) / float(v: r.attempts) * 100.0,\n      pattern: if r.targets >= 20 and r.services >= 5 then \"block\"\n               else if r.services >= 5 then \"vertical\" else \"horizontal\"}))\n  |> map(fn: (r) => ({r with\n      verdict: if r.completion < 20.0 then \"SCAN\" else if r.completion < 50.0 then \"CHECK\" else \"BUSY CLIENT\"}))\n  |> filter(fn: (r) => r.verdict == \"CHECK\")\n  |> count(column: \"src_ip\")\n  |> rename(columns: {src_ip: \"_value\"})\n\n// Union a zero so an empty result reads NONE rather than a blank tile.\nunion(tables: [found, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 0,
+                "result": {
+                  "color": "#0ca30c",
+                  "index": 0,
+                  "text": "NONE"
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 1,
+                "to": 1000000000.0,
+                "result": {
+                  "color": "#fab219",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 42
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 3,
+      "title": "Ping Sweepers",
+      "description": "Sources that sent ICMP to 20 or more distinct hosts: host discovery, usually the step before a port scan. Monitoring systems do this legitimately and will show up here every time.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 10,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\nimport \"array\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nfound = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r.protocol == \"1\" and r._field == \"packets\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\", \"dst_ip\"])\n  |> count()\n  |> group(columns: [\"src_ip\"])\n  |> count()\n  |> group()\n  |> filter(fn: (r) => r._value >= 20)\n  |> count(column: \"src_ip\")\n  |> rename(columns: {src_ip: \"_value\"})\n\nunion(tables: [found, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 0,
+                "result": {
+                  "color": "#0ca30c",
+                  "index": 0,
+                  "text": "NONE"
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 1,
+                "to": 1000000000.0,
+                "result": {
+                  "color": "#fab219",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 42
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 4,
+      "title": "Suricata Scan Alerts",
+      "description": "IDS alerts from the ET SCAN signatures (or category 'Detection of a Network Scan') in range. Independent of the flow heuristics on this board, so the two corroborate each other. Details in the Suricata dashboard.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 15,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\nimport \"array\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nfound = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"suricata_alert\" and r._field == \"count\")\n  |> filter(fn: (r) => r.signature =~ /SCAN/ or r.category =~ /Network Scan/)\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group()\n  |> sum()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [found, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 0,
+                "result": {
+                  "color": "#0ca30c",
+                  "index": 0,
+                  "text": "NONE"
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 1,
+                "to": 1000000000.0,
+                "result": {
+                  "color": "#fab219",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 42
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 5,
+      "title": "TCP Attempts Seen",
+      "description": "Every flow in range that carried a SYN. This tile exists so that NONE on its neighbours means 'nothing scanned', not 'no data': if it reads NO FLOWS, the collector is not writing, and the other tiles prove nothing.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\nimport \"array\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\n// Liveness: every other tile reads NONE on an empty range, which is also what a\n// stopped collector looks like. -1 is the sentinel for \"no TCP flows at all\".\nseen = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r.protocol == \"6\" and r._field == \"syn_packets\" and r._value > 0)\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group()\n  |> count()\n  |> keep(columns: [\"_value\"])\n\nunion(tables: [seen, array.from(rows: [{_value: -1}])])\n  |> group()\n  |> max()\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": -1,
+                "to": -1,
+                "result": {
+                  "color": "#d03b3b",
+                  "index": 0,
+                  "text": "NO FLOWS"
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 1000000000000.0,
+                "result": {
+                  "color": "#3274d9",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 42
+        }
+      }
+    },
+    {
+      "type": "table",
+      "id": 6,
+      "title": "Scan Candidates (click a source to drill down)",
+      "description": "Every source with at least $min_attempts TCP connection attempts that reached 20+ distinct targets (horizontal) or 5+ distinct services (vertical) in range. Services are the collector's bucketed dst_port, so a 1-1000 port scan shows as ~30 services, not 1000 -- the exact ports are in the drill-down. Completion is FIN/SYN over all of the source's TCP: a real client finishes its connections (~100%), a scan does not (~0%). Refused is RSTs per attempt -- high for a scan of closed ports, low for one against filtered ones. Known scanners (vulnerability scanners, monitoring) will appear here every time; that is expected. Country is from a local GeoIP database (IP geolocation by DB-IP, db-ip.com); \"private network\" for any non-public address.",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\n// Connection attempts: flows that carried a SYN. A flow without one is the\n// continuation of a connection cut by active_timeout=5, not a new attempt.\nopens = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r.protocol == \"6\" and r._field == \"syn_packets\" and r._value > 0)\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\", \"dst_ip\", \"service\"])\n  |> count()\n\n// Handshake outcome per source. SYN is counted in both directions (SYN and\n// SYN-ACK), and so is FIN, so a completed connection reads syn 2 / fin 2.\nflags = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r.protocol == \"6\" and (r._field == \"syn_packets\" or r._field == \"fin_packets\" or r._field == \"rst_packets\"))\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\", \"_field\"])\n  |> sum()\n  |> map(fn: (r) => ({src_ip: r.src_ip, k: r._field, v: r._value}))\n\nunion(tables: [\n  opens |> group(columns: [\"src_ip\"]) |> sum()\n        |> map(fn: (r) => ({src_ip: r.src_ip, k: \"attempts\", v: r._value})),\n  opens |> group(columns: [\"src_ip\", \"dst_ip\"]) |> sum() |> group(columns: [\"src_ip\"]) |> count()\n        |> map(fn: (r) => ({src_ip: r.src_ip, k: \"targets\", v: r._value})),\n  opens |> group(columns: [\"src_ip\", \"service\"]) |> sum() |> group(columns: [\"src_ip\"]) |> count()\n        |> map(fn: (r) => ({src_ip: r.src_ip, k: \"services\", v: r._value})),\n  flags,\n])\n  |> group()\n  |> pivot(rowKey: [\"src_ip\"], columnKey: [\"k\"], valueColumn: \"v\")\n  |> filter(fn: (r) => exists r.attempts and r.attempts >= ${min_attempts})\n  |> filter(fn: (r) => r.targets >= 20 or r.services >= 5)\n  |> map(fn: (r) => ({r with\n      completion: if r.syn_packets > 0 then float(v: r.fin_packets) / float(v: r.syn_packets) * 100.0 else 0.0,\n      refused: float(v: r.rst_packets) / float(v: r.attempts) * 100.0,\n      pattern: if r.targets >= 20 and r.services >= 5 then \"block\"\n               else if r.services >= 5 then \"vertical\" else \"horizontal\"}))\n  |> map(fn: (r) => ({r with\n      verdict: if r.completion < 20.0 then \"SCAN\" else if r.completion < 50.0 then \"CHECK\" else \"BUSY CLIENT\"}))\n  |> sort(columns: [\"attempts\"], desc: true)\n  |> limit(n: 25)\n  |> rename(columns: {src_ip: \"ip\"})\n  |> keep(columns: [\"ip\", \"verdict\", \"pattern\", \"attempts\", \"targets\", \"services\", \"completion\", \"refused\"])\n"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "type": "json",
+          "parser": "backend",
+          "source": "url",
+          "format": "table",
+          "url": "http://dns-resolver:8000/resolve?ips=${scanners:csv}&site=${site}",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "ip",
+              "text": "ip",
+              "type": "string"
+            },
+            {
+              "selector": "host",
+              "text": "host",
+              "type": "string"
+            },
+            {
+              "selector": "country",
+              "text": "country",
+              "type": "string"
+            }
+          ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "ip",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^country.*$",
+            "renamePattern": "Country"
+          }
+        },
+        {
+          "id": "filterByValue",
+          "options": {
+            "filters": [
+              {
+                "fieldName": "attempts",
+                "config": {
+                  "id": "isNotNull",
+                  "options": {}
+                }
+              }
+            ],
+            "type": "include",
+            "match": "any"
+          }
+        },
+        {
+          "id": "renameByRegex",
+          "options": {
+            "regex": "^host.*$",
+            "renamePattern": "Hostname"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "ip": 0,
+              "Hostname": 1,
+              "verdict": 3,
+              "pattern": 4,
+              "attempts": 5,
+              "targets": 6,
+              "services": 7,
+              "completion": 8,
+              "refused": 9,
+              "Country": 2
+            },
+            "renameByName": {
+              "ip": "Source",
+              "verdict": "Verdict",
+              "pattern": "Pattern",
+              "attempts": "Attempts",
+              "targets": "Targets",
+              "services": "Services",
+              "completion": "Completed",
+              "refused": "Refused"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Attempts",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Source"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Drill down: ports and targets of ${__value.raw}",
+                    "url": "/d/port-scanners?${__url_time_range}&${site:queryparam}&${cidr:queryparam}&${min_attempts:queryparam}&var-scanner=${__value.raw}"
+                  },
+                  {
+                    "title": "Host Drill-Down for ${__value.raw}",
+                    "url": "/d/host-drilldown?${__url_time_range}&${site:queryparam}&var-ip=${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Verdict"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "SCAN": {
+                        "text": "SCAN",
+                        "color": "#d03b3b",
+                        "index": 0
+                      },
+                      "CHECK": {
+                        "text": "CHECK",
+                        "color": "#fab219",
+                        "index": 1
+                      },
+                      "BUSY CLIENT": {
+                        "text": "BUSY CLIENT",
+                        "color": "#0ca30c",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Completed"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#d03b3b",
+                      "value": null
+                    },
+                    {
+                      "color": "#fab219",
+                      "value": 20
+                    },
+                    {
+                      "color": "#0ca30c",
+                      "value": 50
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Refused"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Attempts"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Targets"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Services"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 7,
+      "title": "Connection Attempts per Candidate",
+      "description": "TCP connection attempts over time for the ten busiest scan candidates. A scan is a short, dense block; a busy client is a long, even band. The bucket follows the time range (~96 buckets, at least 1 minute) and is labelled with its start, so zooming onto a block selects the attempts that drew it.",
+      "gridPos": {
+        "h": 9,
+        "w": 16,
+        "x": 0,
+        "y": 15
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nspanNs = int(v: v.timeRangeStop) - int(v: v.timeRangeStart)\neveryNs = if spanNs / 96 < 60000000000 then 60000000000 else spanNs / 96\nevery = duration(v: everyNs)\n\nattempts = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r.protocol == \"6\" and r._field == \"syn_packets\" and r._value > 0)\n  |> filter(fn: (r) => r.src_ip =~ /^${scanners:regex}$/)\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\"])\n\n// The ten busiest candidates only: ten colours is what a legend can still map\n// back to a host. contains() runs on the per-source totals, not on raw rows.\ntop = attempts\n  |> count()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 10)\n  |> findColumn(fn: (key) => true, column: \"src_ip\")\n\nattempts\n  |> aggregateWindow(every: every, fn: count, timeSrc: \"_start\", createEmpty: false)\n  |> filter(fn: (r) => contains(value: r.src_ip, set: top))\n  |> keep(columns: [\"_time\", \"_value\", \"src_ip\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "displayName": "${__field.labels.src_ip}",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 85,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "gradientMode": "none",
+            "barAlignment": 1,
+            "showPoints": "never",
+            "axisSoftMin": 0
+          },
+          "links": [
+            {
+              "title": "Drill down: ${__field.labels.src_ip}",
+              "url": "/d/port-scanners?${__url_time_range}&${site:queryparam}&${cidr:queryparam}&${min_attempts:queryparam}&var-scanner=${__field.labels.src_ip}"
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "barchart",
+      "id": 8,
+      "title": "Most Probed Services",
+      "description": "What the candidates were looking for: distinct (service, target) pairs the scan candidates tried, per service. smb, rdp, ssh and telnet at the top is the classic lateral-movement search.",
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 15
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\n// Which services the candidates probed, by distinct source: a service many\n// scanners try is what the network is being searched for.\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r.protocol == \"6\" and r._field == \"syn_packets\" and r._value > 0)\n  |> filter(fn: (r) => r.src_ip =~ /^${scanners:regex}$/)\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"service\", \"dst_ip\"])\n  |> count()\n  |> group(columns: [\"service\"])\n  |> count()\n  |> group()\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 15)\n  |> rename(columns: {_value: \"targets\"})\n  |> keep(columns: [\"service\", \"targets\"])\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3274d9"
+          },
+          "custom": {
+            "fillOpacity": 85,
+            "lineWidth": 0,
+            "gradientMode": "none",
+            "axisSoftMin": 0
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xField": "service",
+        "showValue": "auto",
+        "barWidth": 0.8,
+        "groupWidth": 0.7,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        },
+        "xTickLabelRotation": 0
+      }
+    },
+    {
+      "type": "table",
+      "id": 9,
+      "title": "Ping Sweeps (ICMP to 20+ hosts)",
+      "description": "Sources that sent ICMP to many distinct hosts in range. Host discovery usually precedes a port scan from the same source, so a host in both this table and the candidates above is the clearest case on the board.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\n// ICMP host discovery: one source, many destinations, nothing else.\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r.protocol == \"1\" and r._field == \"packets\")\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\", \"dst_ip\"])\n  |> count()\n  |> group(columns: [\"src_ip\"])\n  |> count()\n  |> group()\n  |> filter(fn: (r) => r._value >= 20)\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 25)\n  |> rename(columns: {_value: \"targets\"})\n  |> keep(columns: [\"src_ip\", \"targets\"])\n"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "src_ip": 0,
+              "targets": 1
+            },
+            "renameByName": {
+              "src_ip": "Source",
+              "targets": "Hosts pinged"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Source"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Drill down: ports and targets of ${__value.raw}",
+                    "url": "/d/port-scanners?${__url_time_range}&${site:queryparam}&${cidr:queryparam}&${min_attempts:queryparam}&var-scanner=${__value.raw}"
+                  },
+                  {
+                    "title": "Host Drill-Down for ${__value.raw}",
+                    "url": "/d/host-drilldown?${__url_time_range}&${site:queryparam}&var-ip=${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Hosts pinged"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      }
+    },
+    {
+      "type": "table",
+      "id": 10,
+      "title": "Suricata Scan Detections by Source",
+      "description": "ET SCAN alerts grouped by source. Suricata sees packets, so it catches what flow records blur (NMAP's fixed window size, stealth flag combinations); the flow heuristics above catch scans no signature matches. The full alerts are on the Suricata dashboard.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\nalerts = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"suricata_alert\" and r._field == \"count\")\n  |> filter(fn: (r) => r.signature =~ /SCAN/ or r.category =~ /Network Scan/)\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n\nunion(tables: [\n  alerts |> group(columns: [\"src_ip\"]) |> sum()\n         |> map(fn: (r) => ({src_ip: r.src_ip, k: \"alerts\", v: r._value})),\n  alerts |> group(columns: [\"src_ip\", \"signature\"]) |> sum() |> group(columns: [\"src_ip\"]) |> count()\n         |> map(fn: (r) => ({src_ip: r.src_ip, k: \"signatures\", v: r._value})),\n  alerts |> group(columns: [\"src_ip\", \"dst_ip\"]) |> sum() |> group(columns: [\"src_ip\"]) |> count()\n         |> map(fn: (r) => ({src_ip: r.src_ip, k: \"targets\", v: r._value})),\n])\n  |> group()\n  |> pivot(rowKey: [\"src_ip\"], columnKey: [\"k\"], valueColumn: \"v\")\n  |> sort(columns: [\"alerts\"], desc: true)\n  |> limit(n: 25)\n  |> keep(columns: [\"src_ip\", \"alerts\", \"signatures\", \"targets\"])\n"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "src_ip": 0,
+              "alerts": 1,
+              "signatures": 2,
+              "targets": 3
+            },
+            "renameByName": {
+              "src_ip": "Source",
+              "alerts": "Alerts",
+              "signatures": "Signatures",
+              "targets": "Targets"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Source"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Drill down: ports and targets of ${__value.raw}",
+                    "url": "/d/port-scanners?${__url_time_range}&${site:queryparam}&${cidr:queryparam}&${min_attempts:queryparam}&var-scanner=${__value.raw}"
+                  },
+                  {
+                    "title": "Host Drill-Down for ${__value.raw}",
+                    "url": "/d/host-drilldown?${__url_time_range}&${site:queryparam}&var-ip=${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Alerts"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Signatures"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Targets"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Router Scanner List",
+      "id": 14,
+      "description": "Whether mikrotik-responder is putting detected scanners on the routers' `port-scanners` address list, and how many distinct sources it listed in the selected range. LISTING: the same SCAN verdict as the table above runs every scanners.interval_seconds over the last scanners.window_minutes, plus repeated ET/GPL SCAN alerts. OFF: scanners.enabled = false, or no router has the `scanners` role. QUERY FAILING: the verdict query errors (see the responder log). The list blocks nothing until a router rule references it (`python3 install.py --check` prints it). External sources only unless scanners.scope = all.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 32
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"array\"\n\n// scan_watch is written by mikrotik-responder on every run of the scanner\n// verdict; nothing in the last 15 minutes means it is not running there --\n// scanners.enabled = false. DETECT ONLY (1): it runs, but no router takes\n// the `scanners` role, so SCAN sources are recorded and alerted, not listed.\nstate = from(bucket: \"network_traffic\")\n  |> range(start: -15m)\n  |> filter(fn: (r) => r._measurement == \"scan_watch\" and r._field == \"state_code\")\n  |> last()\n  |> keep(columns: [\"_value\"])\nstate_or_off = union(tables: [state, array.from(rows: [{_value: -1}])])\n  |> group()\n  |> max()\n  |> map(fn: (r) => ({r with _field: \"state\"}))\n\nlisted = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"suricata_block\" and r._field == \"count\")\n  |> filter(fn: (r) => r.list == \"port-scanners\" and (r.result == \"added\" or r.result == \"refreshed\"))\n  |> group(columns: [\"ip\"])\n  |> sum()\n  |> group()\n  |> count()\nlisted_or_zero = union(tables: [listed, array.from(rows: [{_value: 0}])])\n  |> group()\n  |> max()\n  |> map(fn: (r) => ({r with _field: \"listed\"}))\n\nunion(tables: [state_or_off, listed_or_zero])\n  |> pivot(rowKey: [], columnKey: [\"_field\"], valueColumn: \"_value\")\n"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#9ca3af",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "state"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Listing"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "-1": {
+                        "text": "OFF",
+                        "color": "#9ca3af",
+                        "index": 0
+                      },
+                      "0": {
+                        "text": "QUERY FAILING",
+                        "color": "#d03b3b",
+                        "index": 1
+                      },
+                      "1": {
+                        "text": "DETECT ONLY",
+                        "color": "#3b82f6",
+                        "index": 3
+                      },
+                      "2": {
+                        "text": "LISTING",
+                        "color": "#0ca30c",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "listed"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Listed in range"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#9ca3af",
+                      "value": null
+                    },
+                    {
+                      "color": "#3b82f6",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "text": {
+          "titleSize": 13,
+          "valueSize": 22
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "Listed on the Routers (click a source to drill down)",
+      "id": 15,
+      "description": "Every write to the `port-scanners` address list, one row per router. 'Why' is the flow verdict (attempts, targets, services, how many completed) or the ET SCAN signature that put the source there. A refresh is a source that kept scanning and had its RouterOS timeout pushed out. Uses the default list name; if scanners.list is changed, this table and the tile beside it need the same name.",
+      "gridPos": {
+        "h": 8,
+        "w": 18,
+        "x": 6,
+        "y": 32
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"suricata_block\" and r.list == \"port-scanners\")\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> group()\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 100)\n  |> keep(columns: [\"_time\", \"router\", \"ip\", \"result\", \"signature\", \"timeout\"])\n"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "_time": 0,
+              "router": 1,
+              "ip": 2,
+              "result": 3,
+              "signature": 4,
+              "timeout": 5
+            },
+            "renameByName": {
+              "_time": "Time",
+              "router": "Router",
+              "ip": "Source",
+              "result": "Result",
+              "signature": "Why",
+              "timeout": "Expires after"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 180
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Router"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Source"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 140
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Drill down on this source",
+                    "url": "/d/port-scanners?${__url_time_range}&${site:queryparam}&${cidr:queryparam}&${min_attempts:queryparam}&var-scanner=${__value.raw}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Result"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "added": {
+                        "text": "added",
+                        "color": "#0ca30c",
+                        "index": 0
+                      },
+                      "refreshed": {
+                        "text": "refreshed",
+                        "color": "#0ca30c",
+                        "index": 1
+                      },
+                      "dry-run": {
+                        "text": "dry-run",
+                        "color": "#9ca3af",
+                        "index": 2
+                      },
+                      "error": {
+                        "text": "FAILED",
+                        "color": "#d03b3b",
+                        "index": 3
+                      },
+                      "dropped-queue-full": {
+                        "text": "queue full",
+                        "color": "#ec835a",
+                        "index": 4
+                      },
+                      "vanished": {
+                        "text": "vanished",
+                        "color": "#fab219",
+                        "index": 5
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Expires after"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Time",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "row",
+      "id": 11,
+      "title": "Drill-down: ${scanner}",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "panels": []
+    },
+    {
+      "type": "table",
+      "id": 12,
+      "title": "Ports Tried by ${scanner}",
+      "description": "Exact destination ports this source tried in range, open ones first (up to 200). Outcome is read from the flow: 3+ packets means the target answered the SYN (open, or at least reachable), fewer packets with a RST means closed, fewer packets without one means nothing answered (filtered, or no such host). Empty until a source is chosen: click one in any table above, or type it in the Scanner box.",
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 41
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\n// One source, so a pivot is affordable here: every attempt with its port and\n// how the target answered. 1 packet = no answer (filtered or host down); a\n// RST back = closed; 3 or more packets = the SYN was answered, i.e. open.\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r.protocol == \"6\" and r.src_ip == \"${scanner}\")\n  |> filter(fn: (r) => r._field == \"dst_port\" or r._field == \"packets\" or r._field == \"syn_packets\" or r._field == \"rst_packets\")\n  |> filter(fn: (r) => r.dst_ip =~ cidrRe or r.src_ip =~ cidrRe)\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => r.syn_packets > 0)\n  |> map(fn: (r) => ({r with\n      open: if r.packets >= 3 then 1 else 0,\n      closed: if r.packets < 3 and r.rst_packets > 0 then 1 else 0,\n      silent: if r.packets < 3 and r.rst_packets == 0 then 1 else 0}))\n  |> group(columns: [\"dst_port\", \"service\"])\n  |> reduce(identity: {attempts: 0, open: 0, closed: 0, silent: 0}, fn: (r, accumulator) => ({\n      attempts: accumulator.attempts + 1,\n      open: accumulator.open + r.open,\n      closed: accumulator.closed + r.closed,\n      silent: accumulator.silent + r.silent}))\n  |> group()\n  |> sort(columns: [\"open\", \"attempts\"], desc: true)\n  |> limit(n: 200)\n  |> keep(columns: [\"dst_port\", \"service\", \"attempts\", \"open\", \"closed\", \"silent\"])\n"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "dst_port": 0,
+              "service": 1,
+              "attempts": 2,
+              "open": 3,
+              "closed": 4,
+              "silent": 5
+            },
+            "renameByName": {
+              "dst_port": "Port",
+              "service": "Service",
+              "attempts": "Attempts",
+              "open": "Open",
+              "closed": "Closed",
+              "silent": "No answer"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Port"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Port"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Service"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Attempts"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Open"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Closed"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "No answer"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Open"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    },
+                    {
+                      "color": "#ec835a",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      }
+    },
+    {
+      "type": "table",
+      "id": 13,
+      "title": "Targets Tried by ${scanner}",
+      "description": "Hosts this source tried to connect to in range, the ones that answered first (up to 200). An Open count on a host is what the scan found. Outcome is read from the flow: 3+ packets means the target answered the SYN (open, or at least reachable), fewer packets with a RST means closed, fewer packets without one means nothing answered (filtered, or no such host). Empty until a source is chosen: click one in any table above, or type it in the Scanner box.",
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 41
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${site}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${site}"
+          },
+          "query": "import \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\n// One source, so a pivot is affordable here: every attempt with its port and\n// how the target answered. 1 packet = no answer (filtered or host down); a\n// RST back = closed; 3 or more packets = the SYN was answered, i.e. open.\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r.protocol == \"6\" and r.src_ip == \"${scanner}\")\n  |> filter(fn: (r) => r._field == \"dst_port\" or r._field == \"packets\" or r._field == \"syn_packets\" or r._field == \"rst_packets\")\n  |> filter(fn: (r) => r.dst_ip =~ cidrRe or r.src_ip =~ cidrRe)\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> filter(fn: (r) => r.syn_packets > 0)\n  |> map(fn: (r) => ({r with\n      open: if r.packets >= 3 then 1 else 0,\n      closed: if r.packets < 3 and r.rst_packets > 0 then 1 else 0,\n      silent: if r.packets < 3 and r.rst_packets == 0 then 1 else 0}))\n  |> group(columns: [\"dst_ip\"])\n  |> reduce(identity: {attempts: 0, open: 0, closed: 0, silent: 0}, fn: (r, accumulator) => ({\n      attempts: accumulator.attempts + 1,\n      open: accumulator.open + r.open,\n      closed: accumulator.closed + r.closed,\n      silent: accumulator.silent + r.silent}))\n  |> group()\n  |> sort(columns: [\"open\", \"attempts\"], desc: true)\n  |> limit(n: 200)\n  |> keep(columns: [\"dst_ip\", \"attempts\", \"open\", \"closed\", \"silent\"])\n"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "dst_ip": 0,
+              "attempts": 1,
+              "open": 2,
+              "closed": 3,
+              "silent": 4
+            },
+            "renameByName": {
+              "dst_ip": "Target",
+              "attempts": "Attempts",
+              "open": "Open",
+              "closed": "Closed",
+              "silent": "No answer"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Target"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Host Drill-Down for ${__value.raw}",
+                    "url": "/d/host-drilldown?${__url_time_range}&${site:queryparam}&var-ip=${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Attempts"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Open"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Closed"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "No answer"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Open"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    },
+                    {
+                      "color": "#ec835a",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      }
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "site",
+        "type": "datasource",
+        "label": "Site",
+        "description": "Which tzsp-monitor instance these panels read. Remote sites are the REMOTE_SITE_* lines in properties.yml of the instance serving this Grafana; each is a datasource pointed at that site's own InfluxDB, so nothing is copied between sites. Controls never follow this box: rule suppression and reverse DNS only ever act on the local site, and are inert while another site is selected.",
+        "query": "influxdb",
+        "regex": "",
+        "current": {
+          "selected": false,
+          "text": "InfluxDB_Flux",
+          "value": "InfluxDB_Flux"
+        },
+        "options": [],
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1,
+        "skipUrlSync": false
+      },
+      {
+        "name": "cidr",
+        "type": "textbox",
+        "label": "CIDR filter",
+        "description": "Restrict every panel to traffic with either endpoint in this range, e.g. 10.12.0.0/16, 10.12.6.0/24, or a bare IP. Leave empty for no filter. Prefix lengths other than /8, /16, /24 and /32 round down to the enclosing octet boundary, so /20 behaves as /16 and may show a wider range than typed.",
+        "hide": 0,
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "skipUrlSync": false
+      },
+      {
+        "name": "min_attempts",
+        "type": "custom",
+        "label": "Min. attempts",
+        "description": "How many TCP connection attempts (flows carrying a SYN) a source needs in range before it is considered at all. Raise it on a busy network or a long range, lower it to catch slow scans.",
+        "hide": 0,
+        "query": "20,50,100,250,1000",
+        "options": [
+          {
+            "selected": false,
+            "text": "20",
+            "value": "20"
+          },
+          {
+            "selected": true,
+            "text": "50",
+            "value": "50"
+          },
+          {
+            "selected": false,
+            "text": "100",
+            "value": "100"
+          },
+          {
+            "selected": false,
+            "text": "250",
+            "value": "250"
+          },
+          {
+            "selected": false,
+            "text": "1000",
+            "value": "1000"
+          }
+        ],
+        "current": {
+          "selected": true,
+          "text": "50",
+          "value": "50"
+        },
+        "multi": false,
+        "includeAll": false,
+        "skipUrlSync": false
+      },
+      {
+        "name": "scanner",
+        "type": "textbox",
+        "label": "Scanner",
+        "description": "The source the drill-down at the bottom describes. Filled by clicking a source in any table; one IP, exactly.",
+        "hide": 0,
+        "query": "",
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "options": [],
+        "skipUrlSync": false
+      },
+      {
+        "name": "scanners",
+        "type": "query",
+        "label": "Scan candidates (internal)",
+        "description": "Hidden helper: the sources in the Scan Candidates table, fed to the reverse-DNS resolver and the per-candidate chart.",
+        "hide": 2,
+        "datasource": {
+          "type": "influxdb",
+          "uid": "${site}"
+        },
+        "definition": "scan candidates",
+        "query": "import \"regexp\"\nimport \"strings\"\n\n// Turn the CIDR filter box into an anchored prefix regex. Kept as a regex because that\n// is the only form InfluxDB pushes down to storage; mask arithmetic per record\n// times out on a busy mirror. Prefix lengths other than /8, /16, /24 and /32\n// round DOWN to the enclosing octet boundary, so the range can be wider than\n// typed (/20 behaves as /16) -- it never hides matching traffic.\n// The split sits in the else branch on purpose: an empty box has no octets to\n// index, and Flux evaluates a block's statements eagerly.\ncidrPrefix = (cidr) => {\n    p = strings.split(v: cidr, t: \"/\")\n    bits = if length(arr: p) > 1 then int(v: p[1]) else 32\n    o = strings.split(v: p[0], t: \".\")\n\n    return\n        if bits <= 8 then \"^\" + o[0] + \"\\\\.\"\n        else if bits <= 16 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\"\n        else if bits <= 24 then \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\"\n        else \"^\" + o[0] + \"\\\\.\" + o[1] + \"\\\\.\" + o[2] + \"\\\\.\" + o[3] + \"$\"\n}\n\n// An empty box means no filtering.\ncidrRe = if \"${cidr}\" == \"\" then /.*/ else regexp.compile(v: cidrPrefix(cidr: \"${cidr}\"))\n\n// Connection attempts: flows that carried a SYN. A flow without one is the\n// continuation of a connection cut by active_timeout=5, not a new attempt.\nopens = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r.protocol == \"6\" and r._field == \"syn_packets\" and r._value > 0)\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\", \"dst_ip\", \"service\"])\n  |> count()\n\n// Handshake outcome per source. SYN is counted in both directions (SYN and\n// SYN-ACK), and so is FIN, so a completed connection reads syn 2 / fin 2.\nflags = from(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"network_flow\" and r.protocol == \"6\" and (r._field == \"syn_packets\" or r._field == \"fin_packets\" or r._field == \"rst_packets\"))\n  |> filter(fn: (r) => r.src_ip =~ cidrRe or r.dst_ip =~ cidrRe)\n  |> group(columns: [\"src_ip\", \"_field\"])\n  |> sum()\n  |> map(fn: (r) => ({src_ip: r.src_ip, k: r._field, v: r._value}))\n\nunion(tables: [\n  opens |> group(columns: [\"src_ip\"]) |> sum()\n        |> map(fn: (r) => ({src_ip: r.src_ip, k: \"attempts\", v: r._value})),\n  opens |> group(columns: [\"src_ip\", \"dst_ip\"]) |> sum() |> group(columns: [\"src_ip\"]) |> count()\n        |> map(fn: (r) => ({src_ip: r.src_ip, k: \"targets\", v: r._value})),\n  opens |> group(columns: [\"src_ip\", \"service\"]) |> sum() |> group(columns: [\"src_ip\"]) |> count()\n        |> map(fn: (r) => ({src_ip: r.src_ip, k: \"services\", v: r._value})),\n  flags,\n])\n  |> group()\n  |> pivot(rowKey: [\"src_ip\"], columnKey: [\"k\"], valueColumn: \"v\")\n  |> filter(fn: (r) => exists r.attempts and r.attempts >= ${min_attempts})\n  |> filter(fn: (r) => r.targets >= 20 or r.services >= 5)\n  |> map(fn: (r) => ({r with\n      completion: if r.syn_packets > 0 then float(v: r.fin_packets) / float(v: r.syn_packets) * 100.0 else 0.0,\n      refused: float(v: r.rst_packets) / float(v: r.attempts) * 100.0,\n      pattern: if r.targets >= 20 and r.services >= 5 then \"block\"\n               else if r.services >= 5 then \"vertical\" else \"horizontal\"}))\n  |> map(fn: (r) => ({r with\n      verdict: if r.completion < 20.0 then \"SCAN\" else if r.completion < 50.0 then \"CHECK\" else \"BUSY CLIENT\"}))\n  |> sort(columns: [\"attempts\"], desc: true)\n  |> limit(n: 25)\n  |> keep(columns: [\"src_ip\"])\n  |> rename(columns: {src_ip: \"_value\"})\n",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": null,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      }
+    ]
+  }
+}

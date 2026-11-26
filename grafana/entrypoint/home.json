@@ -1,0 +1,97 @@
+{
+  "title": "Home",
+  "description": "tzsp-monitor landing page, served as Grafana's default home (GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH). Edit grafana/entrypoint/home.json, not this dashboard; when adding a dashboard, list it here too.",
+  "editable": false,
+  "graphTooltip": 0,
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "",
+      "transparent": true,
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "mode": "html",
+        "content": "<div style=\"text-align:center\"><img src=\"./public/img/tzsp-monitor.jpg\" alt=\"tzsp-monitor\" style=\"height:150px;border-radius:12px\"><p>Network traffic, intrusion detection and DNS filtering from one mirror. Pick a dashboard below, or use <b>Dashboards</b> in the menu: the folders follow the same order.</p></div>"
+      }
+    },
+    {
+      "id": 2,
+      "type": "text",
+      "title": "",
+      "gridPos": {
+        "h": 25,
+        "w": 6,
+        "x": 0,
+        "y": 6
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "### 1 · Overview\n*Start here: is anything wrong, and where is the traffic going?*\n\n**[Network Health](d/network-health)**  \nWallboard. Traffic vs yesterday, active hosts, fan-out, every tile with a status word.\n\n**[Network Monitor](d/tzsp-network-monitor)**  \nTop applications (nDPI), top talkers with hostnames, throughput and packet rate.\n\n**[Network Topology](d/network-topology)**  \nWho talks to whom: the busiest links as a node graph.\n\n**[Sites Overview](d/sites-overview)**  \nEvery configured site summed on one screen.\n"
+      }
+    },
+    {
+      "id": 3,
+      "type": "text",
+      "title": "",
+      "gridPos": {
+        "h": 25,
+        "w": 6,
+        "x": 6,
+        "y": 6
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "### 2 · Traffic Analysis\n*From the whole network down to a single host.*\n\n**[Application Categories](d/app-category-overview)**  \nBytes by nDPI category and application, and who drives each.\n\n**[Services & Ports](d/services-ports)**  \nTraffic by service and port, cleartext protocols, TLS/DNS server names.\n\n**[Upload vs Download](d/traffic-direction)**  \nDirection split per host and service, and uploads to public addresses.\n\n**[Traffic Baseline](d/traffic-baseline)**  \nWhat normal looks like: hour-of-week heatmap and flow-size profile.\n\n**[Zone Traffic Matrix](d/zone-traffic-matrix)**  \nZone-to-zone traffic, egress and ingress per zone.\n\n**[Subnet Top Talkers](d/subnet-top-talkers)**  \nBytes per segment and the top hosts inside one.\n\n**[Subnet Hosts](d/subnet-hosts)**  \nEvery host in a subnet you type: traffic, reverse-DNS name, MAC and NIC vendor.\n\n**[Host Drill-Down](d/host-drilldown)**  \nOne IP: its peers, applications, latest flow records, and its MAC and vendor.\n"
+      }
+    },
+    {
+      "id": 4,
+      "type": "text",
+      "title": "",
+      "gridPos": {
+        "h": 25,
+        "w": 6,
+        "x": 12,
+        "y": 6
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "### 3 · Security\n*Detections first, then behaviour that no signature covers.*\n\n**[Suricata Alerts & Auto-Block](d/suricata-alerts)**  \nIDS alerts by severity, router blocks, pipeline and disk health, rule tuning.\n\n**[Anomaly Watch](d/anomaly-watch)**  \nFan-out, beacon candidates, new talker pairs and new destinations.\n\n**[Port Scanners](d/port-scanners)**  \nWho is scanning: attempts that fan out and never complete, ping sweeps, ET SCAN alerts; the ports each one tried.\n\n**[Ethernet Attacks](d/ethernet-attacks)**  \nARP spoofing and poisoning, IP conflicts, ARP sweeps; who answers for every IP, with its NIC vendor.\n\n**[TCP Health](d/tcp-health)**  \nSYN/RST/FIN rates, reset ratio and connection completion.\n\n**[IP Reputation Blocking](d/ip-reputation)**  \nControl surface: public blocklists (Spamhaus DROP, Feodo C2, ...) onto a router address list.\n\n**[Packet Capture](d/packet-capture)**  \nControl surface: record the mirror to pcap files, by network, and list them.\n\n**[Wireless IDS](d/wireless-ids)**  \nThe air rather than the wire: evil twins, spoofed APs, deauth floods, KARMA, handshake harvesting; every AP heard.\n\n**[Alerting](d/alerting)**  \nControl surface: run a shell command (a webhook via curl) when any detector finds something, per source and severity.\n"
+      }
+    },
+    {
+      "id": 5,
+      "type": "text",
+      "title": "",
+      "gridPos": {
+        "h": 25,
+        "w": 6,
+        "x": 18,
+        "y": 6
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "### 4 · DNS\n*Who looked up what, and the filter that refuses names.*\n\n**[DNS Activity](d/dns-activity)**  \nLookups per client, and every blocked name with the host that asked.\n\n**[DNS Web Filter](d/dns-web-filter)**  \nControl surface: choose the UT1 categories the router blocks.\n"
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": [],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {
+    "hidden": true
+  },
+  "version": 1
+}

@@ -1,0 +1,2681 @@
+{
+ "uid": "dns-web-filter",
+ "title": "DNS Web Filter (UT1)",
+ "description": "Turn DNS-based web filtering on the Mikrotik router on and off, choose which UT1 content categories are filtered, and refresh the content database. This dashboard is a control surface, not a report -- the panels below the graph perform the changes they display.",
+ "tags": [
+  "network",
+  "tzsp",
+  "mikrotik",
+  "dns",
+  "filtering",
+  "security"
+ ],
+ "timezone": "browser",
+ "editable": true,
+ "graphTooltip": 1,
+ "schemaVersion": 36,
+ "version": 1,
+ "refresh": "1m",
+ "time": {
+  "from": "now-24h",
+  "to": "now"
+ },
+ "timepicker": {},
+ "templating": {
+  "list": [
+   {
+    "name": "filter_action",
+    "type": "custom",
+    "label": "Filtering",
+    "description": "The master switch. Unlike the other boxes this one is a desired state rather than a one-off click: it stays set, is re-sent on every panel refresh, and dns-filter only acts when the router does not already match it. `-` changes nothing, which is what a viewer who has never touched it sends.",
+    "query": "-,on,off",
+    "multi": false,
+    "includeAll": false,
+    "options": [
+     {
+      "selected": true,
+      "text": "-",
+      "value": "-"
+     },
+     {
+      "selected": false,
+      "text": "on",
+      "value": "on"
+     },
+     {
+      "selected": false,
+      "text": "off",
+      "value": "off"
+     }
+    ],
+    "current": {
+     "selected": true,
+     "text": "-",
+     "value": "-"
+    },
+    "hide": 0,
+    "skipUrlSync": false
+   },
+   {
+    "name": "enable_category",
+    "type": "textbox",
+    "label": "Add category",
+    "description": "The UT1 category to start filtering. Normally filled by clicking a row in the catalogue rather than typed. It stays filled and is re-sent on every refresh, which is harmless: adding a category that is already on is a no-op.",
+    "query": "",
+    "current": {
+     "selected": false,
+     "text": "",
+     "value": ""
+    },
+    "options": [],
+    "hide": 0,
+    "skipUrlSync": false
+   },
+   {
+    "name": "disable_category",
+    "type": "textbox",
+    "label": "Remove category",
+    "description": "The category to stop filtering; `all` removes every one. Its adlist row is deleted from the router, so its match-count starts again if it is added back.",
+    "query": "",
+    "current": {
+     "selected": false,
+     "text": "",
+     "value": ""
+    },
+    "options": [],
+    "hide": 0,
+    "skipUrlSync": false
+   },
+   {
+    "name": "update_lists",
+    "type": "custom",
+    "label": "Update lists",
+    "description": "`now` re-reads the UT1 catalogue and re-downloads the categories whose md5 changed. Throttled to dns_filter.min_update_seconds, because this box is re-sent on every panel refresh -- leaving it on `now` does not mean downloading UT1 once a minute.",
+    "query": "-,now",
+    "multi": false,
+    "includeAll": false,
+    "options": [
+     {
+      "selected": true,
+      "text": "-",
+      "value": "-"
+     },
+     {
+      "selected": false,
+      "text": "now",
+      "value": "now"
+     }
+    ],
+    "current": {
+     "selected": true,
+     "text": "-",
+     "value": "-"
+    },
+    "hide": 0,
+    "skipUrlSync": false
+   },
+   {
+    "name": "allow_domain",
+    "type": "textbox",
+    "label": "Whitelist add",
+    "description": "Domains that must never be blocked by a UT1 category, comma-separated. A whitelist entry covers every name under it (example.com also exempts ads.example.com), and `*.example.com` means the same. It stays filled and is re-sent on every refresh, which is harmless: adding a domain that is already listed is a no-op.",
+    "query": "",
+    "current": {
+     "selected": false,
+     "text": "",
+     "value": ""
+    },
+    "options": [],
+    "hide": 0,
+    "skipUrlSync": false
+   },
+   {
+    "name": "unallow_domain",
+    "type": "textbox",
+    "label": "Whitelist remove",
+    "description": "The whitelisted domain to drop; `all` empties the dashboard whitelist. Normally filled by clicking a row in the Whitelist table. Entries from dns_filter.allow_domains in suricata.properties cannot be removed here.",
+    "query": "",
+    "current": {
+     "selected": false,
+     "text": "",
+     "value": ""
+    },
+    "options": [],
+    "hide": 0,
+    "skipUrlSync": false
+   },
+   {
+    "name": "block_domain",
+    "type": "textbox",
+    "label": "Blacklist add",
+    "description": "Domains to block whatever the categories say, comma-separated. Adlist matching is exact: example.com blocks example.com and www.example.com, not mail.example.com -- list each name. Wildcards are refused for that reason. Harmless to leave filled.",
+    "query": "",
+    "current": {
+     "selected": false,
+     "text": "",
+     "value": ""
+    },
+    "options": [],
+    "hide": 0,
+    "skipUrlSync": false
+   },
+   {
+    "name": "unblock_domain",
+    "type": "textbox",
+    "label": "Blacklist remove",
+    "description": "The blacklisted domain to drop; `all` empties the blacklist. Normally filled by clicking a row in the Blacklist table.",
+    "query": "",
+    "current": {
+     "selected": false,
+     "text": "",
+     "value": ""
+    },
+    "options": [],
+    "hide": 0,
+    "skipUrlSync": false
+   }
+  ]
+ },
+ "annotations": {
+  "list": []
+ },
+ "panels": [
+  {
+   "type": "stat",
+   "title": "Web Filtering",
+   "description": "The master switch, as dns-filter has it stored. ON means every enabled category is an active adlist row on the router and matching names resolve to 0.0.0.0. Note that this only affects clients that actually use the router as their resolver -- see the panel on the right.",
+   "id": 1,
+   "gridPos": {
+    "h": 5,
+    "w": 4,
+    "x": 0,
+    "y": 0
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://dns-filter:8040/status",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "filter_enabled",
+       "text": "filter_enabled",
+       "type": "number"
+      }
+     ]
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#9ca3af",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "NO ANSWER"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "filter_enabled"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Filtering"
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "OFF",
+            "color": "#9ca3af",
+            "index": 0
+           },
+           "1": {
+            "text": "ON",
+            "color": "#0ca30c",
+            "index": 1
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "orientation": "horizontal",
+    "textMode": "auto",
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false,
+    "text": {
+     "titleSize": 13,
+     "valueSize": 34
+    }
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Categories",
+   "description": "How many UT1 categories are switched on, out of dns_filter.max_categories. Each one is a separate adlist row on the router and a separate file it downloads from this stack.",
+   "id": 2,
+   "gridPos": {
+    "h": 5,
+    "w": 3,
+    "x": 4,
+    "y": 0
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://dns-filter:8040/status",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "categories",
+       "text": "categories",
+       "type": "number"
+      }
+     ]
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#9ca3af",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "NO ANSWER"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "categories"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Enabled"
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "#9ca3af",
+           "value": null
+          },
+          {
+           "color": "#3b82f6",
+           "value": 1
+          }
+         ]
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "orientation": "horizontal",
+    "textMode": "auto",
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false,
+    "text": {
+     "titleSize": 13,
+     "valueSize": 34
+    }
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Names Blocked",
+   "description": "Names served to the router across every enabled category, and how much of the budget that uses. The budget comes from the router's own /ip dns cache-size, because adlist names are stored in the DNS cache -- that, not the router's RAM, is what runs out. Over 100% is not possible: rendering stops at the budget and marks the categories that did not fit.",
+   "id": 3,
+   "gridPos": {
+    "h": 5,
+    "w": 4,
+    "x": 7,
+    "y": 0
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://dns-filter:8040/status",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "names",
+       "text": "names",
+       "type": "number"
+      },
+      {
+       "selector": "budget_used_pct",
+       "text": "budget_used_pct",
+       "type": "number"
+      }
+     ]
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#9ca3af",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "NO ANSWER"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "names"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Names"
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "#9ca3af",
+           "value": null
+          },
+          {
+           "color": "#3b82f6",
+           "value": 1
+          }
+         ]
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "budget_used_pct"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Of budget"
+       },
+       {
+        "id": "unit",
+        "value": "percent"
+       },
+       {
+        "id": "decimals",
+        "value": 0
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "#0ca30c",
+           "value": null
+          },
+          {
+           "color": "#fab219",
+           "value": 80
+          },
+          {
+           "color": "#ec835a",
+           "value": 99
+          }
+         ]
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "orientation": "horizontal",
+    "textMode": "auto",
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false,
+    "text": {
+     "titleSize": 13,
+     "valueSize": 26
+    }
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Router",
+   "description": "Whether the adlist can be maintained at all. NOT CONFIGURED means mikrotik.* is unset in suricata.properties; NO ADLIST means the router answered but runs RouterOS older than 7.15, which has no /ip/dns/adlist. Nothing is sent to the router in either case. 'Resolver' is the router's allow-remote-requests: with it off, no client uses the router for DNS and every list here is inert however healthy the rest of this board looks. With several routers this is the worst (Router) or the smallest (DNS Cache) of them -- the Routers table below has each one.",
+   "id": 4,
+   "gridPos": {
+    "h": 5,
+    "w": 4,
+    "x": 11,
+    "y": 0
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://dns-filter:8040/status",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "router_state",
+       "text": "router_state",
+       "type": "number"
+      },
+      {
+       "selector": "allow_remote",
+       "text": "allow_remote",
+       "type": "number"
+      }
+     ]
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#9ca3af",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "NO ANSWER"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "router_state"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Adlist API"
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "UNREACHABLE",
+            "color": "#d03b3b",
+            "index": 0
+           },
+           "1": {
+            "text": "NO ADLIST (<7.15)",
+            "color": "#ec835a",
+            "index": 1
+           },
+           "2": {
+            "text": "READY",
+            "color": "#0ca30c",
+            "index": 2
+           },
+           "3": {
+            "text": "NOT CONFIGURED",
+            "color": "#9ca3af",
+            "index": 3
+           }
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "allow_remote"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Resolver"
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "NOT SERVING DNS",
+            "color": "#ec835a",
+            "index": 0
+           },
+           "1": {
+            "text": "SERVING",
+            "color": "#0ca30c",
+            "index": 1
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "orientation": "horizontal",
+    "textMode": "auto",
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false,
+    "text": {
+     "titleSize": 13,
+     "valueSize": 18
+    }
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Router DNS Cache",
+   "description": "Adlist names live in the router's DNS cache. TOO SMALL means the names will not all load and the router logs 'adlist read: max cache size reached' -- raise it on the router (/ip dns set cache-size=65536 gives roughly 400k names) or switch a category off. Nothing here can work around it, and a filter that silently loaded half its list is worse than no filter. With several routers this is the worst (Router) or the smallest (DNS Cache) of them -- the Routers table below has each one.",
+   "id": 5,
+   "gridPos": {
+    "h": 5,
+    "w": 4,
+    "x": 15,
+    "y": 0
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://dns-filter:8040/status",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "cache_state",
+       "text": "cache_state",
+       "type": "number"
+      },
+      {
+       "selector": "cache_needed_kib",
+       "text": "cache_needed_kib",
+       "type": "number"
+      }
+     ]
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#9ca3af",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "NO ANSWER"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "cache_state"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Fit"
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "UNKNOWN",
+            "color": "#9ca3af",
+            "index": 0
+           },
+           "1": {
+            "text": "FITS",
+            "color": "#0ca30c",
+            "index": 1
+           },
+           "2": {
+            "text": "TOO SMALL",
+            "color": "#d03b3b",
+            "index": 2
+           }
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "cache_needed_kib"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Needs (KiB)"
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "#9ca3af",
+           "value": null
+          },
+          {
+           "color": "#3b82f6",
+           "value": 1
+          }
+         ]
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "orientation": "horizontal",
+    "textMode": "auto",
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false,
+    "text": {
+     "titleSize": 13,
+     "valueSize": 20
+    }
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Content Database",
+   "description": "How long ago the UT1 lists were last checked. They are rebuilt daily and only the categories whose md5 changed are downloaded, so a check is nearly free; it runs by itself every dns_filter.update_interval_hours. Set the 'Update lists' box to `now` to force one.",
+   "id": 6,
+   "gridPos": {
+    "h": 5,
+    "w": 5,
+    "x": 19,
+    "y": 0
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://dns-filter:8040/status",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "list_age_seconds",
+       "text": "list_age_seconds",
+       "type": "number"
+      },
+      {
+       "selector": "catalog_size",
+       "text": "catalog_size",
+       "type": "number"
+      }
+     ]
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#9ca3af",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "NO ANSWER"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "list_age_seconds"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Updated"
+       },
+       {
+        "id": "unit",
+        "value": "s"
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "-1": {
+            "text": "NEVER",
+            "color": "#9ca3af",
+            "index": 0
+           }
+          }
+         },
+         {
+          "type": "range",
+          "options": {
+           "from": 0,
+           "to": 129600,
+           "result": {
+            "text": "",
+            "color": "#0ca30c",
+            "index": 1
+           }
+          }
+         },
+         {
+          "type": "range",
+          "options": {
+           "from": 129600,
+           "to": 604800,
+           "result": {
+            "text": "",
+            "color": "#fab219",
+            "index": 2
+           }
+          }
+         },
+         {
+          "type": "range",
+          "options": {
+           "from": 604800,
+           "to": 99999999,
+           "result": {
+            "text": "",
+            "color": "#ec835a",
+            "index": 3
+           }
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "catalog_size"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "UT1 categories"
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "#d03b3b",
+           "value": null
+          },
+          {
+           "color": "#3b82f6",
+           "value": 1
+          }
+         ]
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "orientation": "horizontal",
+    "textMode": "auto",
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false,
+    "text": {
+     "titleSize": 13,
+     "valueSize": 20
+    }
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Blocked Queries by Category",
+   "description": "DNS lookups the router answered with 0.0.0.0 because the name was on one of these lists, counted per category from RouterOS's own match-count. The counter restarts whenever the router reloads a list, so it is shipped as a per-interval delta -- same reason as suricata_stats. A category that never rises is one nobody on this network tries to reach: worth switching off, since it costs DNS cache either way.",
+   "id": 7,
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 5
+   },
+   "datasource": {
+    "type": "influxdb",
+    "uid": "InfluxDB_Flux"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "InfluxDB_Flux"
+     },
+     "query": "// dns_filter_list.matches is already a per-minute delta, so summing\n// over the window is the number of blocked lookups in it.\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"dns_filter_list\" and r._field == \"matches\")\n  |> aggregateWindow(every: v.windowPeriod, fn: sum, createEmpty: false)\n  |> group(columns: [\"category\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"category\"])\n"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "decimals": 0,
+     "custom": {
+      "drawStyle": "bars",
+      "lineWidth": 1,
+      "fillOpacity": 70,
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      },
+      "gradientMode": "none",
+      "barAlignment": 0,
+      "showPoints": "never",
+      "axisSoftMin": 0
+     },
+     "color": {
+      "mode": "palette-classic-by-name"
+     },
+     "displayName": "${__field.labels.category}"
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "showLegend": true,
+     "calcs": [
+      "sum"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "type": "table",
+   "title": "Routers (every router with the dns_filter role)",
+   "description": "Each router that gets the adlists (mikrotik.routers, roles including dns_filter). Every one fetches the same hosts files, so the name budget is sized for the smallest DNS cache, and the tiles above read the worst router. 'Fetches lists from' is the URL that router is handed: mikrotik.<name>.dns_filter_base_url, or dns_filter.base_url -- routers in different networks may need different addresses for this host. A router that was down during a change gets its reload when it is back. Names loaded is what the router itself reports having read.",
+   "id": 15,
+   "gridPos": {
+    "h": 6,
+    "w": 24,
+    "x": 0,
+    "y": 13
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://dns-filter:8040/routers",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "router",
+       "text": "router",
+       "type": "string"
+      },
+      {
+       "selector": "host",
+       "text": "host",
+       "type": "string"
+      },
+      {
+       "selector": "state",
+       "text": "state",
+       "type": "number"
+      },
+      {
+       "selector": "version",
+       "text": "version",
+       "type": "string"
+      },
+      {
+       "selector": "cache_size_kib",
+       "text": "cache_size_kib",
+       "type": "number"
+      },
+      {
+       "selector": "cache_used_kib",
+       "text": "cache_used_kib",
+       "type": "number"
+      },
+      {
+       "selector": "allow_remote",
+       "text": "allow_remote",
+       "type": "number"
+      },
+      {
+       "selector": "lists",
+       "text": "lists",
+       "type": "number"
+      },
+      {
+       "selector": "names_loaded",
+       "text": "names_loaded",
+       "type": "number"
+      },
+      {
+       "selector": "blocked",
+       "text": "blocked",
+       "type": "number"
+      },
+      {
+       "selector": "base_url",
+       "text": "base_url",
+       "type": "string"
+      },
+      {
+       "selector": "probed_at",
+       "text": "probed_at",
+       "type": "string"
+      }
+     ]
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "indexByName": {
+       "router": 0,
+       "host": 1,
+       "state": 2,
+       "version": 3,
+       "cache_size_kib": 4,
+       "cache_used_kib": 5,
+       "allow_remote": 6,
+       "lists": 7,
+       "names_loaded": 8,
+       "blocked": 9,
+       "base_url": 10,
+       "probed_at": 11
+      },
+      "renameByName": {
+       "router": "Router",
+       "host": "Address",
+       "state": "State",
+       "version": "RouterOS",
+       "cache_size_kib": "DNS cache",
+       "cache_used_kib": "Cache used",
+       "allow_remote": "Resolver",
+       "lists": "Adlists",
+       "names_loaded": "Names loaded",
+       "blocked": "Blocked",
+       "base_url": "Fetches lists from",
+       "probed_at": "Probed"
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "filterable": false
+     },
+     "unit": "none",
+     "decimals": 0,
+     "noValue": "No router has this role"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "State"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 150
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "3": {
+            "text": "NOT CONFIGURED",
+            "color": "#9ca3af",
+            "index": 0
+           },
+           "0": {
+            "text": "UNREACHABLE",
+            "color": "#d03b3b",
+            "index": 1
+           },
+           "1": {
+            "text": "NO ADLIST (<7.15)",
+            "color": "#ec835a",
+            "index": 2
+           },
+           "2": {
+            "text": "READY",
+            "color": "#0ca30c",
+            "index": 3
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Resolver"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 110
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "OFF",
+            "color": "#ec835a",
+            "index": 0
+           },
+           "1": {
+            "text": "ON",
+            "color": "#0ca30c",
+            "index": 1
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "DNS cache"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "kbytes"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Cache used"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "kbytes"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Router"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 110
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Probed"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 175
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Filter Control",
+   "description": "State of the dns-filter service itself. READ-ONLY is dns_filter.control_enabled = false: the tables below still render, but no click changes anything. WORKING means a download or a router reload is in flight, so the tables are one refresh behind. BASE URL MISSING means dns_filter.base_url is unset and the router has no URL to fetch, which makes everything else here a dry run.",
+   "id": 8,
+   "gridPos": {
+    "h": 5,
+    "w": 8,
+    "x": 0,
+    "y": 19
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://dns-filter:8040/status",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "control_enabled",
+       "text": "control_enabled",
+       "type": "number"
+      },
+      {
+       "selector": "syncing",
+       "text": "syncing",
+       "type": "number"
+      },
+      {
+       "selector": "base_url_set",
+       "text": "base_url_set",
+       "type": "number"
+      }
+     ]
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "decimals": 0,
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#9ca3af",
+        "value": null
+       }
+      ]
+     },
+     "noValue": "NO ANSWER"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "control_enabled"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Actions"
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "READ-ONLY",
+            "color": "#9ca3af",
+            "index": 0
+           },
+           "1": {
+            "text": "WRITABLE",
+            "color": "#0ca30c",
+            "index": 1
+           }
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "syncing"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "Service"
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "IDLE",
+            "color": "#0ca30c",
+            "index": 0
+           },
+           "1": {
+            "text": "WORKING",
+            "color": "#3b82f6",
+            "index": 1
+           }
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "base_url_set"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "List URL"
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "MISSING",
+            "color": "#d03b3b",
+            "index": 0
+           },
+           "1": {
+            "text": "SET",
+            "color": "#0ca30c",
+            "index": 1
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "orientation": "horizontal",
+    "textMode": "auto",
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "wideLayout": true,
+    "showPercentChange": false,
+    "text": {
+     "titleSize": 13,
+     "valueSize": 18
+    }
+   }
+  },
+  {
+   "type": "text",
+   "title": "How the web filter works",
+   "id": 9,
+   "gridPos": {
+    "h": 5,
+    "w": 16,
+    "x": 8,
+    "y": 19
+   },
+   "options": {
+    "mode": "markdown",
+    "code": {
+     "language": "plaintext",
+     "showLineNumbers": false,
+     "showMiniMap": false
+    },
+    "content": "**Turn it on or off:** the `Filtering` box. Unlike the other boxes it is a *state*, not a click -- it stays where you leave it and is re-asserted on every refresh, so the router is put back the way this says even if someone changed it by hand. Off leaves the rows in place and only disables them, so the per-category counts survive.\n\n**Choose what is filtered:** click a category in *UT1 Catalogue* to add it, or in *Filtered Categories* to remove it. `all` in the remove box clears everything. A category is downloaded, deduplicated against the ones already on, rendered as a hosts file and handed to the router; that takes a few seconds, so a new row appears as DOWNLOADING first.\n\n**Exceptions:** the `Whitelist add` box exempts a domain *and everything under it* from every category; the `Blacklist add` box blocks exact names whatever the categories say (one more adlist, `_blacklist`). Both take comma-separated domains and are harmless to leave filled; click a row in the *Whitelist* / *Blacklist* table to remove it. An explicit block beats the whitelist, and the same domain cannot be on both.\n\n**Update the content database:** set `Update lists` to `now`. UT1 rebuilds daily and this happens by itself once a day; a manual run is throttled to dns_filter.min_update_seconds, because this box is re-sent on every refresh.\n\n**Three things this cannot do.** It only affects clients that use the router as their resolver -- anything on DNS-over-HTTPS bypasses it entirely, which is why the `doh` category is worth enabling. Adlist matching is exact, so `www.` forms are generated but a random subdomain of a blocked domain is not covered. And UT1's per-URL entries are ignored, because DNS cannot act on a path.\n\n**Anyone who can view this dashboard can switch the filter off** -- the call runs with the datasource's identity, not the viewer's, and nothing records who clicked. Every change is written to InfluxDB as `dns_filter_control`, which is the table at the bottom."
+   }
+  },
+  {
+   "type": "table",
+   "title": "Filtered Categories (click one to stop filtering it)",
+   "description": "What is switched on, straight from dns-filter -- and this panel is also what performs the change: the request carries all four control boxes, so what you see is the state after the action. CAPPED means the category did not fit in the name budget and is only partly served; 'Loaded' is what the router itself reports having read, which is the only number that proves the filter is live.",
+   "id": 10,
+   "gridPos": {
+    "h": 11,
+    "w": 14,
+    "x": 0,
+    "y": 24
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://dns-filter:8040/apply?filter=${filter_action}&enable=${enable_category}&disable=${disable_category}&update=${update_lists}",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "category",
+       "text": "category",
+       "type": "string"
+      },
+      {
+       "selector": "state",
+       "text": "state",
+       "type": "string"
+      },
+      {
+       "selector": "domains",
+       "text": "domains",
+       "type": "number"
+      },
+      {
+       "selector": "names",
+       "text": "names",
+       "type": "number"
+      },
+      {
+       "selector": "on_router",
+       "text": "on_router",
+       "type": "number"
+      },
+      {
+       "selector": "router_names",
+       "text": "router_names",
+       "type": "number"
+      },
+      {
+       "selector": "blocked",
+       "text": "blocked",
+       "type": "number"
+      },
+      {
+       "selector": "since",
+       "text": "since",
+       "type": "string"
+      },
+      {
+       "selector": "detail",
+       "text": "detail",
+       "type": "string"
+      }
+     ]
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "indexByName": {
+       "category": 0,
+       "state": 1,
+       "domains": 2,
+       "names": 3,
+       "on_router": 4,
+       "router_names": 5,
+       "blocked": 6,
+       "since": 7,
+       "detail": 8
+      },
+      "renameByName": {
+       "category": "Category",
+       "state": "State",
+       "domains": "UT1 domains",
+       "names": "Names served",
+       "on_router": "Active",
+       "router_names": "Loaded",
+       "blocked": "Blocked",
+       "since": "Since",
+       "detail": "Detail"
+      }
+     }
+    },
+    {
+     "id": "sortBy",
+     "options": {
+      "fields": {},
+      "sort": [
+       {
+        "field": "Category"
+       }
+      ]
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "filterable": true
+     },
+     "unit": "none",
+     "decimals": 0
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Category"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 130
+       },
+       {
+        "id": "links",
+        "value": [
+         {
+          "title": "Stop filtering this category",
+          "url": "/d/dns-web-filter?${__url_time_range}&${filter_action:queryparam}&var-update_lists=-&var-disable_category=${__value.raw}&var-enable_category=",
+          "targetBlank": false
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "State"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 120
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "ok": {
+            "text": "FILTERING",
+            "color": "#0ca30c",
+            "index": 0
+           },
+           "pending": {
+            "text": "DOWNLOADING",
+            "color": "#3b82f6",
+            "index": 1
+           },
+           "capped": {
+            "text": "CAPPED",
+            "color": "#fab219",
+            "index": 2
+           },
+           "error": {
+            "text": "ERROR",
+            "color": "#d03b3b",
+            "index": 3
+           },
+           "custom": {
+            "text": "BLACKLIST",
+            "color": "#0ca30c",
+            "index": 4
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Active"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 80
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "NO",
+            "color": "#9ca3af",
+            "index": 0
+           },
+           "1": {
+            "text": "YES",
+            "color": "#0ca30c",
+            "index": 1
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Blocked"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 90
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Since"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 175
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "sortBy": [
+     {
+      "displayName": "Category",
+      "desc": false
+     }
+    ]
+   }
+  },
+  {
+   "type": "table",
+   "title": "UT1 Catalogue (click a category to filter it)",
+   "description": "Every category the Universite Toulouse 1 blacklist publishes, with the size of its archive. 'Same as' comes from UT1's own MD5SUM.LST: those categories are byte-identical lists under different names, and adding the second one is refused because it would cost the router's cache twice for the same names. TOO BIG is refused before it is downloaded -- `adult`/`porn` is 4.6M names, roughly 700 MB of DNS cache.",
+   "id": 11,
+   "gridPos": {
+    "h": 11,
+    "w": 10,
+    "x": 14,
+    "y": 24
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://dns-filter:8040/catalog?filter=${filter_action}&enable=${enable_category}&disable=${disable_category}&update=${update_lists}",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "category",
+       "text": "category",
+       "type": "string"
+      },
+      {
+       "selector": "size",
+       "text": "size",
+       "type": "string"
+      },
+      {
+       "selector": "enabled",
+       "text": "enabled",
+       "type": "number"
+      },
+      {
+       "selector": "fits",
+       "text": "fits",
+       "type": "number"
+      },
+      {
+       "selector": "aliases",
+       "text": "aliases",
+       "type": "string"
+      },
+      {
+       "selector": "published",
+       "text": "published",
+       "type": "string"
+      }
+     ]
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "indexByName": {
+       "category": 0,
+       "size": 1,
+       "enabled": 2,
+       "fits": 3,
+       "aliases": 4,
+       "published": 5
+      },
+      "renameByName": {
+       "category": "Category",
+       "size": "Archive",
+       "enabled": "On",
+       "fits": "Usable",
+       "aliases": "Same as",
+       "published": "Published"
+      }
+     }
+    },
+    {
+     "id": "sortBy",
+     "options": {
+      "fields": {},
+      "sort": [
+       {
+        "field": "Category"
+       }
+      ]
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "filterable": true
+     },
+     "unit": "none",
+     "decimals": 0
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Category"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 150
+       },
+       {
+        "id": "links",
+        "value": [
+         {
+          "title": "Filter this category",
+          "url": "/d/dns-web-filter?${__url_time_range}&${filter_action:queryparam}&var-update_lists=-&var-enable_category=${__value.raw}&var-disable_category=",
+          "targetBlank": false
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Archive"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 80
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "On"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 70
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "-",
+            "color": "#9ca3af",
+            "index": 0
+           },
+           "1": {
+            "text": "ON",
+            "color": "#0ca30c",
+            "index": 1
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Usable"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 90
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "TOO BIG",
+            "color": "#ec835a",
+            "index": 0
+           },
+           "1": {
+            "text": "yes",
+            "color": "#9ca3af",
+            "index": 1
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Published"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 130
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "sortBy": [
+     {
+      "displayName": "Category",
+      "desc": false
+     }
+    ]
+   }
+  },
+  {
+   "type": "table",
+   "title": "Whitelist (click a domain to stop exempting it)",
+   "description": "Domains that are never blocked by a UT1 category -- each entry exempts itself and every name under it. Add with the `Whitelist add` box. 'Exempted' is how many names the entry kept off the router at the last render: 0 means none of the enabled categories lists it, so it is doing nothing yet. Entries from suricata.properties (dns_filter.allow_domains) are listed too but can only be removed there. The whitelist does not override the Blacklist: an explicit block of tracker.example.com wins over a whitelisted example.com.",
+   "id": 13,
+   "gridPos": {
+    "h": 9,
+    "w": 12,
+    "x": 0,
+    "y": 35
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://dns-filter:8040/whitelist?allow=${allow_domain}&unallow=${unallow_domain}",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "domain",
+       "text": "domain",
+       "type": "string"
+      },
+      {
+       "selector": "source",
+       "text": "source",
+       "type": "string"
+      },
+      {
+       "selector": "exempted",
+       "text": "exempted",
+       "type": "number"
+      },
+      {
+       "selector": "since",
+       "text": "since",
+       "type": "string"
+      },
+      {
+       "selector": "note",
+       "text": "note",
+       "type": "string"
+      }
+     ]
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "indexByName": {
+       "domain": 0,
+       "source": 1,
+       "exempted": 2,
+       "since": 3,
+       "note": 4
+      },
+      "renameByName": {
+       "domain": "Domain",
+       "source": "Source",
+       "exempted": "Exempted",
+       "since": "Since",
+       "note": "Note"
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "filterable": true
+     },
+     "unit": "none",
+     "decimals": 0,
+     "noValue": "Nothing whitelisted"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Domain"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 220
+       },
+       {
+        "id": "links",
+        "value": [
+         {
+          "title": "Remove from the whitelist",
+          "url": "/d/dns-web-filter?${__url_time_range}&${filter_action:queryparam}&var-update_lists=-&var-unallow_domain=${__value.raw}&var-allow_domain=",
+          "targetBlank": false
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Source"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 160
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "dashboard": {
+            "text": "DASHBOARD",
+            "color": "#3b82f6",
+            "index": 0
+           },
+           "suricata.properties": {
+            "text": "PROPERTY FILE",
+            "color": "#9ca3af",
+            "index": 1
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Exempted"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 100
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Since"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 175
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "sortBy": [
+     {
+      "displayName": "Domain",
+      "desc": false
+     }
+    ]
+   }
+  },
+  {
+   "type": "table",
+   "title": "Blacklist (click a domain to stop blocking it)",
+   "description": "Domains blocked by hand, whatever the categories say. Add with the `Blacklist add` box. They are served to the router as one more adlist (`_blacklist` in the categories table above, with its own Loaded and Blocked counts), rendered before every category so a big UT1 list can never crowd them out of the name budget. Matching is exact: 'Names' is precisely what the router will refuse. AUTOMATIC entries were added by mikrotik-responder for a domain a compromise alert named (domain_block.*); they expire by themselves, the Note says which signature, and adding one by hand makes it permanent. Removing one here works, but the next qualifying alert adds it back.",
+   "id": 14,
+   "gridPos": {
+    "h": 9,
+    "w": 12,
+    "x": 12,
+    "y": 35
+   },
+   "datasource": {
+    "type": "yesoreyeram-infinity-datasource",
+    "uid": "infinity"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "yesoreyeram-infinity-datasource",
+      "uid": "infinity"
+     },
+     "type": "json",
+     "parser": "backend",
+     "source": "url",
+     "format": "table",
+     "url": "http://dns-filter:8040/blacklist?block=${block_domain}&unblock=${unblock_domain}",
+     "url_options": {
+      "method": "GET"
+     },
+     "root_selector": "",
+     "columns": [
+      {
+       "selector": "domain",
+       "text": "domain",
+       "type": "string"
+      },
+      {
+       "selector": "source",
+       "text": "source",
+       "type": "string"
+      },
+      {
+       "selector": "until",
+       "text": "until",
+       "type": "string"
+      },
+      {
+       "selector": "names",
+       "text": "names",
+       "type": "string"
+      },
+      {
+       "selector": "since",
+       "text": "since",
+       "type": "string"
+      },
+      {
+       "selector": "note",
+       "text": "note",
+       "type": "string"
+      }
+     ]
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "indexByName": {
+       "domain": 0,
+       "source": 1,
+       "until": 2,
+       "names": 3,
+       "since": 4,
+       "note": 5
+      },
+      "renameByName": {
+       "domain": "Domain",
+       "names": "Names",
+       "since": "Since",
+       "note": "Note",
+       "source": "Source",
+       "until": "Expires"
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "filterable": true
+     },
+     "noValue": "Nothing blacklisted"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Domain"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 220
+       },
+       {
+        "id": "links",
+        "value": [
+         {
+          "title": "Remove from the blacklist",
+          "url": "/d/dns-web-filter?${__url_time_range}&${filter_action:queryparam}&var-update_lists=-&var-unblock_domain=${__value.raw}&var-block_domain=",
+          "targetBlank": false
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Since"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 175
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Source"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 120
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "dashboard": {
+            "text": "BY HAND",
+            "color": "#3b82f6",
+            "index": 0
+           },
+           "automatic": {
+            "text": "AUTOMATIC",
+            "color": "#ec835a",
+            "index": 1
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Expires"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 175
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "sortBy": [
+     {
+      "displayName": "Domain",
+      "desc": false
+     }
+    ]
+   }
+  },
+  {
+   "type": "table",
+   "title": "Filter Changes (audit)",
+   "description": "Every change dns-filter made, from its own audit write to InfluxDB. The container log rotates away and Grafana keeps no record of who clicked, so this is what is left to answer 'when did we stop filtering that, and why'. Detail carries a note if the call was made by hand with `&note=...`; the dashboard itself cannot send one, because free text would have to be URL-encoded into the Infinity URL by a Grafana variable.",
+   "id": 12,
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 44
+   },
+   "datasource": {
+    "type": "influxdb",
+    "uid": "InfluxDB_Flux"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "influxdb",
+      "uid": "InfluxDB_Flux"
+     },
+     "query": "// `detail` carries the note; the action and category are tags, so no\n// pivot is needed to get one row per change.\nfrom(bucket: \"network_traffic\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"dns_filter_control\" and r._field == \"detail\")\n  |> keep(columns: [\"_time\", \"action\", \"category\", \"_value\"])\n  |> group()\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 200)\n"
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {},
+      "indexByName": {
+       "_time": 0,
+       "action": 1,
+       "category": 2,
+       "_value": 3
+      },
+      "renameByName": {
+       "_time": "Time",
+       "action": "Change",
+       "category": "Category / domain",
+       "_value": "Detail"
+      }
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "filterable": true
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Time"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 190
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Change"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 150
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "enable": {
+            "text": "CATEGORY ON",
+            "color": "#0ca30c",
+            "index": 0
+           },
+           "disable": {
+            "text": "CATEGORY OFF",
+            "color": "#fab219",
+            "index": 1
+           },
+           "filter_on": {
+            "text": "FILTER ON",
+            "color": "#0ca30c",
+            "index": 2
+           },
+           "filter_off": {
+            "text": "FILTER OFF",
+            "color": "#d03b3b",
+            "index": 3
+           },
+           "update": {
+            "text": "LIST UPDATE",
+            "color": "#3b82f6",
+            "index": 4
+           },
+           "allow": {
+            "text": "WHITELIST +",
+            "color": "#0ca30c",
+            "index": 5
+           },
+           "unallow": {
+            "text": "WHITELIST -",
+            "color": "#fab219",
+            "index": 6
+           },
+           "block": {
+            "text": "BLACKLIST +",
+            "color": "#0ca30c",
+            "index": 7
+           },
+           "unblock": {
+            "text": "BLACKLIST -",
+            "color": "#fab219",
+            "index": 8
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Category / domain"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 220
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "sortBy": [
+     {
+      "displayName": "Time",
+      "desc": true
+     }
+    ]
+   }
+  }
+ ]
+}
